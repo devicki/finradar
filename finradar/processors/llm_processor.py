@@ -116,12 +116,37 @@ _METADATA_SYSTEM = (
     "Example output: {\"tickers\": [\"NVDA\", \"AMD\"], \"sectors\": [\"반도체\", \"AI\"]}"
 )
 
+_ENRICH_ALL_SYSTEM = (
+    "You are a senior financial news analyst and translator. "
+    "Given a financial news article, perform ALL of the following tasks in a single response.\n\n"
+    "You MUST return a single, valid JSON object with exactly these keys:\n"
+    "  \"ai_summary\": A concise 2-3 sentence English summary focusing on key facts, "
+    "quantitative figures, and market impact.\n"
+    "  \"translated_title\": The article title translated to Korean. "
+    "Preserve ticker symbols and numbers as-is.\n"
+    "  \"translated_summary\": The summary (or article content) translated to Korean. "
+    "Preserve ticker symbols and numbers as-is.\n"
+    "  \"tickers\": An array of uppercase stock ticker symbols mentioned "
+    "(e.g. [\"AAPL\", \"TSLA\"]). Use empty array [] if none found.\n"
+    "  \"sectors\": An array of relevant financial sectors in Korean "
+    "(e.g. [\"반도체\", \"AI\", \"에너지\"]). Use empty array [] if none found.\n\n"
+    "Rules:\n"
+    "  - Use professional financial language.\n"
+    "  - Preserve all ticker symbols, numeric values, percentages, and currency symbols unchanged.\n"
+    "  - Return ONLY the JSON object. No markdown fences, no explanations, no extra text.\n\n"
+    "Example output:\n"
+    "{\"ai_summary\": \"NVIDIA reported Q3 revenue of $35.1B, beating estimates by 12%...\", "
+    "\"translated_title\": \"엔비디아, AI 칩 수요 급증으로 3분기 실적 예상치 상회\", "
+    "\"translated_summary\": \"엔비디아가 3분기 매출 351억 달러를 기록하며...\", "
+    "\"tickers\": [\"NVDA\"], \"sectors\": [\"반도체\", \"AI\"]}"
+)
+
 
 class LLMProcessor:
     """Cloud LLM processor for summarisation, translation, and metadata extraction.
 
     Args:
-        provider: ``"anthropic"`` or ``"openai"``.  Defaults to
+        provider: ``"anthropic"``, ``"openai"``, or ``"grok"``.  Defaults to
                   ``settings.llm_provider``.
     """
 
@@ -164,10 +189,24 @@ class LLMProcessor:
             self._client = openai.OpenAI(api_key=settings.openai_api_key)
             self.logger.info("OpenAI client initialised (model: %s)", settings.openai_model)
 
+        elif self.provider == "grok":
+            import openai
+
+            if not settings.grok_api_key:
+                raise ValueError(
+                    "GROK_API_KEY is not set. "
+                    "Add it to your .env file or environment variables."
+                )
+            self._client = openai.OpenAI(
+                api_key=settings.grok_api_key,
+                base_url=settings.grok_base_url,
+            )
+            self.logger.info("Grok client initialised (model: %s)", settings.grok_model)
+
         else:
             raise ValueError(
                 f"Unknown LLM provider: {self.provider!r}. "
-                "Accepted values: 'anthropic', 'openai'."
+                "Accepted values: 'anthropic', 'openai', 'grok'."
             )
 
         return self._client
@@ -205,14 +244,15 @@ class LLMProcessor:
         return ""
 
     def _call_openai_sync(self, system: str, user_message: str) -> str:
-        """Synchronous OpenAI API call.  Must not be called directly in async code."""
+        """Synchronous OpenAI/Grok API call.  Must not be called directly in async code."""
         import openai
 
         client: openai.OpenAI = self._get_client()  # type: ignore[assignment]
         settings = get_settings()
 
+        model = settings.active_llm_model()
         response = client.chat.completions.create(
-            model=settings.openai_model,
+            model=model,
             max_tokens=settings.llm_max_tokens,
             messages=[
                 {"role": "system", "content": system},
@@ -247,6 +287,8 @@ class LLMProcessor:
         try:
             if self.provider == "anthropic":
                 sync_fn = partial(self._call_anthropic_sync, system, user_message)
+            elif self.provider in ("openai", "grok"):
+                sync_fn = partial(self._call_openai_sync, system, user_message)
             else:
                 sync_fn = partial(self._call_openai_sync, system, user_message)
 
@@ -443,6 +485,103 @@ class LLMProcessor:
             "Failed to parse metadata JSON for article %r. Raw response (first 200): %r",
             title[:60],
             raw[:200],
+        )
+        return empty
+
+    # ------------------------------------------------------------------
+    # Combined enrichment (single LLM call)
+    # ------------------------------------------------------------------
+
+    async def enrich_article(
+        self,
+        title: str,
+        content: str,
+        language: str = "en",
+    ) -> dict[str, Any]:
+        """Summarize, translate, and extract metadata in a single LLM call.
+
+        Returns a dict with keys: ai_summary, translated_title,
+        translated_summary, tickers, sectors.  Missing fields default
+        to empty string / empty list.
+
+        Args:
+            title:    Article headline.
+            content:  Article body text.
+            language: Source language of the article.
+
+        Raises:
+            RuntimeError: If the underlying LLM call fails.
+        """
+        user_message = (
+            f"Title: {title}\n\n"
+            f"Article:\n{content[:2000]}"
+        )
+
+        if language != "en":
+            user_message += f"\n\nNote: The source language is '{language}'."
+
+        self.logger.debug("Enriching article in single call: %r", title[:80])
+        raw_response = await self._call_llm(_ENRICH_ALL_SYSTEM, user_message)
+        parsed = self._parse_enrich_response(raw_response, title)
+        self.logger.debug(
+            "Enrichment complete — summary=%d chars, tickers=%s, sectors=%s",
+            len(parsed.get("ai_summary", "")),
+            parsed.get("tickers"),
+            parsed.get("sectors"),
+        )
+        return parsed
+
+    def _parse_enrich_response(
+        self, raw: str, title: str = ""
+    ) -> dict[str, Any]:
+        """Parse the combined enrichment JSON response with graceful fallback."""
+        empty: dict[str, Any] = {
+            "ai_summary": "",
+            "translated_title": "",
+            "translated_summary": "",
+            "tickers": [],
+            "sectors": [],
+        }
+
+        if not raw:
+            return empty
+
+        def _normalise(data: Any) -> dict[str, Any]:
+            if not isinstance(data, dict):
+                return empty
+            result = {
+                "ai_summary": str(data.get("ai_summary", "")).strip(),
+                "translated_title": str(data.get("translated_title", "")).strip(),
+                "translated_summary": str(data.get("translated_summary", "")).strip(),
+                "tickers": [],
+                "sectors": [],
+            }
+            tickers = data.get("tickers", [])
+            sectors = data.get("sectors", [])
+            if isinstance(tickers, list):
+                result["tickers"] = [str(t).upper().strip() for t in tickers if t]
+            if isinstance(sectors, list):
+                result["sectors"] = [str(s).strip() for s in sectors if s]
+            return result
+
+        # Strategy 1: direct parse
+        try:
+            return _normalise(json.loads(raw.strip()))
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: extract first {...} block (greedy for nested JSON)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            try:
+                return _normalise(json.loads(match.group()))
+            except json.JSONDecodeError:
+                pass
+
+        self.logger.warning(
+            "Failed to parse enrichment JSON for article %r. Raw (first 300): %r",
+            title[:60],
+            raw[:300],
         )
         return empty
 

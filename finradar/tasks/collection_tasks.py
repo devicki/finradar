@@ -583,15 +583,10 @@ def _build_embedding_text(item: NewsItem) -> str:
     queue="finradar.llm",
 )
 def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
-    """Enrich a single news item with cloud LLM summary, translation, and metadata.
+    """Enrich a single news item with a single LLM call.
 
-    Steps
-    -----
-    1. Fetch the NewsItem from DB.
-    2. Generate an AI summary (English → concise financial summary).
-    3. Translate title and summary to Korean (en → ko).
-    4. Extract structured tickers and sectors if not already set.
-    5. Persist all updates.
+    Performs summary, translation (en→ko), and metadata extraction
+    (tickers/sectors) in one combined prompt to minimize API costs.
 
     Parameters
     ----------
@@ -600,10 +595,7 @@ def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
 
     Notes
     -----
-    - This task is intentionally serialised per item (not batched) because
-      each item needs independent LLM calls and we want fine-grained retry
-      semantics.
-    - LLM calls are async; we bridge them with _run_async().
+    - Uses ``LLMProcessor.enrich_article()`` — one LLM call instead of 3-4.
     - If the item already has an ai_summary the task exits immediately (idempotent).
     """
     logger.info("enrich_with_llm: enriching news_id=%d", news_id)
@@ -640,94 +632,41 @@ def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
         logger.error("Failed to initialise LLMProcessor: %s", exc, exc_info=True)
         raise self.retry(exc=exc)
 
-    update_kwargs: dict[str, Any] = {"updated_at": _now_utc()}
-
-    # --- AI Summary ---
-    self.update_state(state="STARTED", meta={"news_id": news_id, "stage": "summarising"})
+    # --- Single LLM call: summary + translation + metadata ---
+    self.update_state(state="STARTED", meta={"news_id": news_id, "stage": "enriching"})
     try:
-        ai_summary: str = _run_async(
-            llm.summarize(item_title, item_summary or "")
+        enrichment: dict[str, Any] = _run_async(
+            llm.enrich_article(item_title, item_summary or "", item_language)
         )
-        update_kwargs["ai_summary"] = ai_summary
-        logger.debug("enrich_with_llm: summary generated for news_id=%d", news_id)
     except Exception as exc:
         logger.error(
-            "enrich_with_llm: summarisation failed for news_id=%d: %s",
-            news_id,
-            exc,
-            exc_info=True,
+            "enrich_with_llm: LLM call failed for news_id=%d: %s",
+            news_id, exc, exc_info=True,
         )
-        # Do not retry yet — continue with translation/metadata and retry
-        # the whole task only if all steps fail (handled by outer retry).
+        raise self.retry(exc=exc, countdown=300)
 
-    # --- Translation (en → ko) ---
-    if item_language == "en":
-        self.update_state(
-            state="STARTED", meta={"news_id": news_id, "stage": "translating"}
-        )
-        try:
-            translated_title: str = _run_async(
-                llm.translate(item_title, "en", "ko")
-            )
-            update_kwargs["translated_title"] = translated_title
-        except Exception as exc:
-            logger.error(
-                "enrich_with_llm: title translation failed for news_id=%d: %s",
-                news_id,
-                exc,
-            )
+    # --- Build update dict from enrichment result ---
+    update_kwargs: dict[str, Any] = {"updated_at": _now_utc()}
 
-        if item_summary:
-            try:
-                translated_summary: str = _run_async(
-                    llm.translate(item_summary, "en", "ko")
-                )
-                update_kwargs["translated_summary"] = translated_summary
-            except Exception as exc:
-                logger.error(
-                    "enrich_with_llm: summary translation failed for news_id=%d: %s",
-                    news_id,
-                    exc,
-                )
+    if enrichment.get("ai_summary"):
+        update_kwargs["ai_summary"] = enrichment["ai_summary"]
+    if enrichment.get("translated_title"):
+        update_kwargs["translated_title"] = enrichment["translated_title"]
+    if enrichment.get("translated_summary"):
+        update_kwargs["translated_summary"] = enrichment["translated_summary"]
+    if not item_tickers and enrichment.get("tickers"):
+        update_kwargs["tickers"] = enrichment["tickers"]
+    if not item_sectors and enrichment.get("sectors"):
+        update_kwargs["sectors"] = enrichment["sectors"]
 
-        logger.debug("enrich_with_llm: translation done for news_id=%d", news_id)
-
-    # --- Metadata extraction (tickers / sectors) ---
-    # Only run if the item doesn't already have structured metadata (some
-    # collectors — e.g. Polygon.io — provide tickers directly).
-    if not item_tickers or not item_sectors:
-        self.update_state(
-            state="STARTED", meta={"news_id": news_id, "stage": "metadata"}
-        )
-        try:
-            metadata: dict[str, list[str]] = _run_async(
-                llm.extract_metadata(item_title, item_summary or "")
-            )
-            if not item_tickers and metadata.get("tickers"):
-                update_kwargs["tickers"] = [
-                    t.upper().strip() for t in metadata["tickers"] if t and t.strip()
-                ]
-            if not item_sectors and metadata.get("sectors"):
-                update_kwargs["sectors"] = [
-                    s.strip() for s in metadata["sectors"] if s and s.strip()
-                ]
-            logger.debug("enrich_with_llm: metadata extracted for news_id=%d", news_id)
-        except Exception as exc:
-            logger.error(
-                "enrich_with_llm: metadata extraction failed for news_id=%d: %s",
-                news_id,
-                exc,
-            )
-
-    # --- Persist all updates ---
+    # --- Persist ---
     if len(update_kwargs) <= 1:
-        # Only updated_at was set — nothing succeeded; retry.
         logger.error(
-            "enrich_with_llm: all LLM calls failed for news_id=%d — will retry",
+            "enrich_with_llm: LLM returned empty results for news_id=%d — will retry",
             news_id,
         )
         raise self.retry(
-            exc=RuntimeError(f"All LLM calls failed for news_id={news_id}"),
+            exc=RuntimeError(f"LLM returned empty results for news_id={news_id}"),
             countdown=300,
         )
 

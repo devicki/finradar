@@ -81,7 +81,8 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     anthropic_api_key: str = Field(default="", description="Anthropic Claude API key")
     openai_api_key: str = Field(default="", description="OpenAI API key")
-    llm_provider: Literal["anthropic", "openai"] = Field(
+    grok_api_key: str = Field(default="", description="xAI Grok API key")
+    llm_provider: Literal["anthropic", "openai", "grok"] = Field(
         default="anthropic",
         description="Which cloud LLM provider to use for summarization / translation",
     )
@@ -89,6 +90,8 @@ class Settings(BaseSettings):
     # Model identifiers for cloud usage
     anthropic_model: str = Field(default="claude-opus-4-6")
     openai_model: str = Field(default="gpt-4o-mini")
+    grok_model: str = Field(default="grok-3-mini-fast")
+    grok_base_url: str = Field(default="https://api.x.ai/v1")
 
     # Maximum tokens the LLM may generate per summary/translation call
     llm_max_tokens: int = Field(default=512, ge=64, le=4096)
@@ -174,12 +177,16 @@ class Settings(BaseSettings):
         """Return the API key for the currently configured LLM provider."""
         if self.llm_provider == "anthropic":
             return self.anthropic_api_key
+        if self.llm_provider == "grok":
+            return self.grok_api_key
         return self.openai_api_key
 
     def active_llm_model(self) -> str:
         """Return the model identifier for the currently configured LLM provider."""
         if self.llm_provider == "anthropic":
             return self.anthropic_model
+        if self.llm_provider == "grok":
+            return self.grok_model
         return self.openai_model
 
 
