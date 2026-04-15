@@ -1,0 +1,131 @@
+version: "3.9"
+
+networks:
+  finradar-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 + pgvector
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: finradar
+      POSTGRES_USER: finradar
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-finradar_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finradar -d finradar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - finradar-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 (cache + Celery broker/backend)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - finradar-net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn finradar.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app  # mount source for --reload during development
+    networks:
+      - finradar-net
+
+  # ---------------------------------------------------------------------------
+  # Celery worker (AI processing tasks)
+  # ---------------------------------------------------------------------------
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A finradar.tasks.celery_app worker --loglevel=info --concurrency=4
+    volumes:
+      - .:/app
+    networks:
+      - finradar-net
+    # Give access to GPU for local FinBERT / embedding inference.
+    # Comment out if running without NVIDIA runtime.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat scheduler (periodic news collection)
+  # ---------------------------------------------------------------------------
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A finradar.tasks.celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+    networks:
+      - finradar-net
