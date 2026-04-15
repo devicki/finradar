@@ -97,6 +97,13 @@ _MAX_ITEMS_PER_PROCESSING_RUN: int = 200
 # enriched on-demand via the API.
 _LLM_AUTO_ENRICH_LANGUAGES: frozenset[str] = frozenset({"en"})
 
+# Minimum absolute sentiment score to qualify for LLM enrichment.
+# FinBERT is trained on financial text — non-financial articles tend to
+# score near 0.0 (neutral) with low confidence.  A threshold of 0.05
+# filters out most irrelevant articles while keeping genuine financial news
+# that happens to be neutral.  Set to 0.0 to enrich everything.
+_LLM_ENRICH_MIN_SENTIMENT_SCORE: float = 0.05
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -511,9 +518,14 @@ def process_pending_news(self: Task) -> dict[str, Any]:
                     .values(**update_kwargs)
                 )
 
-            # Collect IDs eligible for LLM enrichment
+            # Collect IDs eligible for LLM enrichment:
+            # - Must be in a supported language (English by default)
+            # - Must have a sentiment score above threshold (filters out
+            #   non-financial articles that FinBERT scores near zero)
             if (item.language or "en") in _LLM_AUTO_ENRICH_LANGUAGES:
-                llm_enrich_ids.append(item_id)
+                sentiment_score = sentiment_results.get(item_id, {}).get("score", 0.0)
+                if abs(sentiment_score) >= _LLM_ENRICH_MIN_SENTIMENT_SCORE:
+                    llm_enrich_ids.append(item_id)
 
         session.commit()
 
