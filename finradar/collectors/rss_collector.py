@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
     {
-        "url": "https://feeds.reuters.com/reuters/businessNews",
-        "name": "Reuters Business",
+        "url": "https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com",
+        "name": "Reuters via Google News",
         "language": "en",
     },
     {
