@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # News APIs
     # -------------------------------------------------------------------------
     newsapi_key: str = Field(default="", description="NewsAPI.org API key")
+    newsapi_enabled: bool = Field(
+        default=False,
+        description="Enable NewsAPI.org collector. Set to false in production (free plan is dev-only)",
+    )
     polygon_api_key: str = Field(default="", description="Polygon.io API key")
 
     # -------------------------------------------------------------------------

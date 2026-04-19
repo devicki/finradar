@@ -270,8 +270,10 @@ def collect_all_news(self: Task) -> dict[str, Any]:
         logger.error("RSS collection failed: %s", exc, exc_info=True)
         collector_results["rss"] = 0
 
-    # --- NewsAPI (only when a key is configured) ---
-    if settings.newsapi_key:
+    # --- NewsAPI (only when enabled AND a key is configured) ---
+    # NewsAPI free plan is dev-only (not for commercial use).
+    # Set NEWSAPI_ENABLED=false in production.
+    if settings.newsapi_enabled and settings.newsapi_key:
         try:
             newsapi_articles: list[CollectedArticle] = _run_async(_collect_newsapi())
             collector_results["newsapi"] = len(newsapi_articles)
@@ -354,7 +356,7 @@ async def _collect_newsapi() -> list[CollectedArticle]:
     """
     from finradar.collectors.newsapi_collector import NewsAPICollector  # noqa: PLC0415
 
-    async with NewsAPICollector(max_concurrent=settings.collector_concurrency) as collector:
+    async with NewsAPICollector(api_key=settings.newsapi_key, max_concurrent=settings.collector_concurrency) as collector:
         return await collector.safe_collect()
 
 
