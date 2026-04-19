@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
+    # --- Global (English) ---
     {
         "url": "https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com",
         "name": "Reuters via Google News",
@@ -52,6 +53,57 @@ DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
         "url": "https://www.ft.com/?format=rss",
         "name": "Financial Times",
         "language": "en",
+    },
+    # --- Korean ---
+    {
+        "url": "https://www.hankyung.com/feed/economy",
+        "name": "한국경제 경제",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.hankyung.com/feed/finance",
+        "name": "한국경제 증권",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.hankyung.com/feed/international",
+        "name": "한국경제 국제",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.mk.co.kr/rss/30000001/",
+        "name": "매일경제 헤드라인",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.mk.co.kr/rss/50200011/",
+        "name": "매일경제 증권",
+        "language": "ko",
+    },
+    {
+        "url": "http://rss.edaily.co.kr/edaily_news.xml",
+        "name": "이데일리 전체",
+        "language": "ko",
+    },
+    {
+        "url": "http://rss.mt.co.kr/mt_news.xml",
+        "name": "머니투데이 전체",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.yonhapnewseconomytv.com/rss/allArticle.xml",
+        "name": "연합뉴스경제TV 전체",
+        "language": "ko",
+    },
+    {
+        "url": "https://www.sedaily.com/rss/Economy",
+        "name": "서울경제 경제",
+        "language": "ko",
+    },
+    {
+        "url": "https://rss.etnews.com/Section901.xml",
+        "name": "전자신문 전체",
+        "language": "ko",
     },
 ]
 
