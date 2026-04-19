@@ -61,6 +61,10 @@ CREATE TABLE IF NOT EXISTS news_items (
     translated_summary  TEXT,
     ai_summary          TEXT,
 
+    -- LLM enrichment bookkeeping
+    llm_enrich_attempts  INTEGER NOT NULL DEFAULT 0,
+    llm_last_attempt_at  TIMESTAMPTZ,
+
     -- Structured tags (array columns, indexed with GIN)
     tickers         VARCHAR(16)[],          -- e.g. '{AAPL,TSLA}'
     sectors         VARCHAR(64)[],          -- e.g. '{반도체,AI}'
@@ -114,6 +118,22 @@ CREATE INDEX IF NOT EXISTS idx_news_source_type
 -- Topic foreign-key lookups
 CREATE INDEX IF NOT EXISTS idx_news_topic_id
     ON news_items (topic_id);
+
+-- ---------------------------------------------------------------------------
+-- Migration: LLM enrichment bookkeeping (for databases created before these
+-- columns were part of the initial schema).  Safe to run repeatedly.
+-- ---------------------------------------------------------------------------
+ALTER TABLE news_items
+    ADD COLUMN IF NOT EXISTS llm_enrich_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE news_items
+    ADD COLUMN IF NOT EXISTS llm_last_attempt_at TIMESTAMPTZ;
+
+-- Partial index to make the reconcile query fast: only indexes rows that are
+-- still candidates for LLM enrichment (the vast majority eventually leave
+-- this set when ai_summary is populated).
+CREATE INDEX IF NOT EXISTS idx_news_llm_pending
+    ON news_items (llm_last_attempt_at NULLS FIRST)
+    WHERE ai_summary IS NULL;
 
 -- ---------------------------------------------------------------------------
 -- Trigger: auto-update search_vector on INSERT / UPDATE

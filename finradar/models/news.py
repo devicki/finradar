@@ -101,6 +101,20 @@ class NewsItem(Base):
     ai_summary: Mapped[Optional[str]] = mapped_column(Text)
 
     # ------------------------------------------------------------------
+    # LLM enrichment bookkeeping (prevents infinite retry / token waste)
+    # ------------------------------------------------------------------
+    llm_enrich_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default="0",
+        comment="Number of LLM enrichment calls made for this row; caps retries",
+    )
+    llm_last_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        comment="Set when queued/executed; debounces reconcile re-queue",
+    )
+
+    # ------------------------------------------------------------------
     # Structured tags
     # ------------------------------------------------------------------
     tickers: Mapped[Optional[list[str]]] = mapped_column(

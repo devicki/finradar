@@ -22,6 +22,12 @@ enrich_with_llm       — Called on-demand (or triggered by collect_all_news for
                         an AI summary, translates title+summary to Korean, and
                         extracts structured tickers/sectors via the cloud LLM.
 
+reconcile_pending_llm — Runs every 10 min (Beat).  Safety net that re-queues
+                        enrich_with_llm for items whose original task was lost
+                        to a restart / crash.  Guarded by an attempt counter
+                        and an in-flight debounce window to avoid runaway
+                        token spend on chronically-failing articles.
+
 Sync DB layer
 -------------
 Celery tasks are synchronous.  We create a dedicated sync SQLAlchemy engine
@@ -39,11 +45,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from celery import Task, group, shared_task
-from sqlalchemy import create_engine, func, select, update
+from sqlalchemy import create_engine, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -103,6 +109,21 @@ _LLM_AUTO_ENRICH_LANGUAGES: frozenset[str] = frozenset({"en"})
 # filters out most irrelevant articles while keeping genuine financial news
 # that happens to be neutral.  Set to 0.0 to enrich everything.
 _LLM_ENRICH_MIN_SENTIMENT_SCORE: float = 0.05
+
+# Absolute cap on LLM enrichment calls per article.  Each enrich_with_llm
+# invocation increments llm_enrich_attempts; once this limit is reached
+# reconcile_pending_llm stops picking the row up, preventing runaway token
+# spend on articles the LLM consistently fails to process.
+_LLM_ENRICH_MAX_ATTEMPTS: int = 5
+
+# In-flight debounce window.  After queuing (or executing) enrich_with_llm for
+# a row, reconcile will not re-queue it until this many minutes have passed.
+# Prevents double-processing while a Celery task is still running or retrying.
+_LLM_ENRICH_DEBOUNCE_MINUTES: int = 30
+
+# Soft cap on how many items reconcile_pending_llm claims in one run.
+# Keeps a single run from flooding the broker if a large backlog accumulates.
+_RECONCILE_BATCH_LIMIT: int = 100
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -529,6 +550,16 @@ def process_pending_news(self: Task) -> dict[str, Any]:
                 if abs(sentiment_score) >= _LLM_ENRICH_MIN_SENTIMENT_SCORE:
                     llm_enrich_ids.append(item_id)
 
+        # Claim eligible rows before enqueuing so that reconcile_pending_llm
+        # won't pick them up again while these tasks are still in flight.
+        # The enrich_with_llm task will refresh this timestamp on entry.
+        if llm_enrich_ids:
+            session.execute(
+                update(NewsItem)
+                .where(NewsItem.id.in_(llm_enrich_ids))
+                .values(llm_last_attempt_at=now)
+            )
+
         session.commit()
 
     logger.info(
@@ -629,6 +660,34 @@ def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
             )
             return {"status": "skipped", "reason": "already_enriched", "news_id": news_id}
 
+        # Attempt-limit check: if we've already burned the retry budget, abort
+        # without calling the LLM.  reconcile_pending_llm filters by the same
+        # limit, but an in-flight task scheduled before the limit was hit could
+        # still arrive here — so we double-check.
+        if (item.llm_enrich_attempts or 0) >= _LLM_ENRICH_MAX_ATTEMPTS:
+            logger.warning(
+                "enrich_with_llm: news_id=%d has %d attempts (>= cap %d) — aborting",
+                news_id, item.llm_enrich_attempts, _LLM_ENRICH_MAX_ATTEMPTS,
+            )
+            return {
+                "status": "skipped",
+                "reason": "attempts_exhausted",
+                "news_id": news_id,
+            }
+
+        # Claim this invocation: bump attempts + refresh timestamp atomically.
+        # Committing before the LLM call ensures the counter rises even if the
+        # worker is killed mid-request (protects against runaway retries).
+        session.execute(
+            update(NewsItem)
+            .where(NewsItem.id == news_id)
+            .values(
+                llm_enrich_attempts=NewsItem.llm_enrich_attempts + 1,
+                llm_last_attempt_at=_now_utc(),
+            )
+        )
+        session.commit()
+
         # Snapshot mutable fields before the session closes
         item_id = item.id
         item_title = item.title
@@ -717,3 +776,97 @@ def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
         "tickers": update_kwargs.get("tickers"),
         "sectors": update_kwargs.get("sectors"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Task: reconcile_pending_llm
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    bind=True,
+    name="finradar.tasks.collection_tasks.reconcile_pending_llm",
+    max_retries=2,
+    default_retry_delay=120,
+    queue="finradar",
+)
+def reconcile_pending_llm(self: Task) -> dict[str, Any]:
+    """Re-queue LLM enrichment for items orphaned by restarts or task loss.
+
+    Why this exists
+    ---------------
+    process_pending_news only queues enrich_with_llm for items it *just*
+    computed sentiment for.  If the worker dies (or Redis is restarted)
+    before the enrichment task runs, the row stays in a "sentiment set,
+    ai_summary NULL" state and is never retried.
+
+    This task scans for such orphans every few minutes and re-queues them,
+    guarded by an attempt counter and an in-flight debounce window so that
+    no article can burn tokens indefinitely.
+
+    Guardrails
+    ----------
+    - Per-row cap: ``llm_enrich_attempts < _LLM_ENRICH_MAX_ATTEMPTS`` (default 5).
+      Each enrich_with_llm invocation bumps the counter; once the cap is hit
+      the row is left alone (an operator must reset it manually to retry).
+    - Debounce: rows touched within ``_LLM_ENRICH_DEBOUNCE_MINUTES`` are
+      skipped — prevents double-queueing while a task is still running.
+    - Per-run cap: ``_RECONCILE_BATCH_LIMIT`` items per tick keeps the broker
+      from being flooded when a large backlog accumulates.
+    - ``SELECT ... FOR UPDATE SKIP LOCKED`` makes the claim race-free when
+      multiple Beat / reconcile runs overlap.
+    """
+    logger.info("reconcile_pending_llm: scanning for orphaned LLM items")
+    self.update_state(state="STARTED", meta={"stage": "scanning"})
+
+    now = _now_utc()
+    debounce_cutoff = now - timedelta(minutes=_LLM_ENRICH_DEBOUNCE_MINUTES)
+
+    with SyncSessionLocal() as session:
+        # Find candidate IDs with row-level locks so concurrent reconciles
+        # don't double-claim.  The query mirrors the eligibility rules used
+        # by process_pending_news, with attempt + debounce guards added.
+        candidate_ids: list[int] = session.execute(
+            select(NewsItem.id)
+            .where(
+                NewsItem.sentiment.is_not(None),
+                func.abs(NewsItem.sentiment) >= _LLM_ENRICH_MIN_SENTIMENT_SCORE,
+                NewsItem.language.in_(tuple(_LLM_AUTO_ENRICH_LANGUAGES)),
+                NewsItem.ai_summary.is_(None),
+                NewsItem.llm_enrich_attempts < _LLM_ENRICH_MAX_ATTEMPTS,
+                or_(
+                    NewsItem.llm_last_attempt_at.is_(None),
+                    NewsItem.llm_last_attempt_at < debounce_cutoff,
+                ),
+            )
+            .order_by(NewsItem.last_seen_at.desc())
+            .limit(_RECONCILE_BATCH_LIMIT)
+            .with_for_update(skip_locked=True)
+        ).scalars().all()
+
+        if not candidate_ids:
+            logger.info("reconcile_pending_llm: no orphaned items found")
+            return {"status": "ok", "requeued": 0}
+
+        # Claim the rows by stamping llm_last_attempt_at.  enrich_with_llm
+        # will bump llm_enrich_attempts when it actually runs — we leave the
+        # counter alone here so this scan doesn't burn the budget on its own.
+        session.execute(
+            update(NewsItem)
+            .where(NewsItem.id.in_(candidate_ids))
+            .values(llm_last_attempt_at=now)
+        )
+        session.commit()
+
+    logger.info(
+        "reconcile_pending_llm: claimed %d items for re-enrichment",
+        len(candidate_ids),
+    )
+
+    enrich_group = group(
+        enrich_with_llm.s(news_id).set(queue="finradar.llm")
+        for news_id in candidate_ids
+    )
+    enrich_group.apply_async()
+
+    return {"status": "ok", "requeued": len(candidate_ids)}

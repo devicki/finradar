@@ -11,6 +11,7 @@ The app is importable as:
 Beat schedule (configured via celery_app.conf.beat_schedule):
 - collect-news-every-N-min  — triggers the full collection pipeline
 - process-unprocessed-news  — runs the local-GPU AI processing loop
+- reconcile-pending-llm     — re-queues LLM enrichment orphaned by restarts
 """
 
 from __future__ import annotations
@@ -94,6 +95,14 @@ celery_app.conf.beat_schedule = {
     "process-unprocessed-news": {
         "task": "finradar.tasks.collection_tasks.process_pending_news",
         "schedule": 300,  # 5 minutes
+        "options": {"queue": "finradar"},
+    },
+    # Safety net: re-queue LLM enrichment for items whose task was lost to a
+    # restart, worker crash, or broker outage.  Attempt counter + debounce
+    # window (in the task itself) prevent runaway token spend.
+    "reconcile-pending-llm": {
+        "task": "finradar.tasks.collection_tasks.reconcile_pending_llm",
+        "schedule": 600,  # 10 minutes
         "options": {"queue": "finradar"},
     },
 }
