@@ -138,11 +138,13 @@ async def get_feed_summary(
 
     # ---- Fetch all rows in the window (only the columns we need) -----------
     # We intentionally avoid pulling the large text / embedding columns here.
+    # ai_summary is pulled as a boolean check (NULL vs not) via a computed column.
     stmt = (
         select(
             NewsItem.sentiment_label,
             NewsItem.tickers,
             NewsItem.sectors,
+            NewsItem.ai_summary,
         )
         .where(NewsItem.first_seen_at >= window_start)
     )
@@ -154,20 +156,38 @@ async def get_feed_summary(
     ticker_counts: Counter[str] = Counter()
     sector_counts: Counter[str] = Counter()
 
+    # Coverage counters — surface to the client so sparse Top charts are
+    # explained ("only 3.9% of articles have tickers extracted") instead of
+    # looking like a bug.
+    articles_with_tickers = 0
+    articles_with_sectors = 0
+    articles_llm_enriched = 0
+
     for row in rows:
         label = row.sentiment_label
         if label in ("positive", "negative", "neutral"):
             sentiment_counts[label] += 1
 
+        row_has_ticker = False
         if row.tickers:
             for ticker in row.tickers:
                 if ticker:
                     ticker_counts[ticker.upper()] += 1
+                    row_has_ticker = True
+        if row_has_ticker:
+            articles_with_tickers += 1
 
+        row_has_sector = False
         if row.sectors:
             for sector in row.sectors:
                 if sector:
                     sector_counts[sector] += 1
+                    row_has_sector = True
+        if row_has_sector:
+            articles_with_sectors += 1
+
+        if row.ai_summary:
+            articles_llm_enriched += 1
 
     # ---- Build response ----------------------------------------------------
     sentiment_dist = SentimentDistribution(
@@ -187,6 +207,9 @@ async def get_feed_summary(
 
     return FeedSummaryResponse(
         total_count=total_count,
+        articles_with_tickers=articles_with_tickers,
+        articles_with_sectors=articles_with_sectors,
+        articles_llm_enriched=articles_llm_enriched,
         sentiment_distribution=sentiment_dist,
         top_tickers=top_tickers,
         top_sectors=top_sectors,

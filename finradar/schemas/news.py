@@ -267,6 +267,24 @@ class FeedSummaryResponse(BaseModel):
     """Aggregated statistics for the daily / time-ranged feed summary."""
 
     total_count: int = Field(..., description="Total number of news items in the window")
+    # Coverage metrics — help clients judge how much of the data is enriched
+    # before drawing conclusions from the Top Tickers / Sectors charts.
+    articles_with_tickers: int = Field(
+        default=0,
+        description="Articles in the window that have at least one ticker extracted",
+    )
+    articles_with_sectors: int = Field(
+        default=0,
+        description="Articles in the window that have at least one sector extracted",
+    )
+    articles_llm_enriched: int = Field(
+        default=0,
+        description=(
+            "Articles in the window whose LLM enrichment (ai_summary) has completed. "
+            "Tickers/sectors are populated mostly by the LLM step, so a low value here "
+            "explains sparse Top Tickers / Sectors charts."
+        ),
+    )
     sentiment_distribution: SentimentDistribution
     top_tickers: list[dict] = Field(
         ...,
