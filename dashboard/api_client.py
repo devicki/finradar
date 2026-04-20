@@ -59,6 +59,7 @@ def search(
     tickers: list[str] | None = None,
     sectors: list[str] | None = None,
     include_scores: bool = True,
+    dedup: bool = False,
     weight_bm25: float | None = None,
     weight_cosine: float | None = None,
     weight_recency: float | None = None,
@@ -80,6 +81,7 @@ def search(
             "tickers": tickers,
             "sectors": sectors,
             "include_scores": include_scores,
+            "dedup": dedup,
             "weight_bm25": weight_bm25,
             "weight_cosine": weight_cosine,
             "weight_recency": weight_recency,
@@ -87,6 +89,11 @@ def search(
             "page_size": page_size,
         },
     )
+
+
+def get_cluster_siblings(news_id: int) -> dict[str, Any]:
+    """Fetch all articles sharing a cluster with the given news item."""
+    return _get(f"/news/{news_id}/cluster")
 
 
 # ---------------------------------------------------------------------------

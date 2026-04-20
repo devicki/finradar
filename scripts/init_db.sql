@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS news_items (
     -- Full-text search (maintained by trigger below)
     search_vector   TSVECTOR,
 
+    -- Clustering (cosine-similarity-based news grouping, maintained by
+    -- periodic Celery task finradar.tasks.collection_tasks.cluster_news)
+    cluster_rep_id    INT REFERENCES news_items(id) ON DELETE SET NULL,
+    cluster_size      INT NOT NULL DEFAULT 1,
+    similarity_to_rep REAL,
+
     -- Row timestamps
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -106,6 +112,14 @@ CREATE INDEX IF NOT EXISTS idx_news_tickers
 -- Recency-based feed queries (most recent first)
 CREATE INDEX IF NOT EXISTS idx_news_last_seen
     ON news_items (last_seen_at DESC);
+
+-- Cluster sibling lookup
+CREATE INDEX IF NOT EXISTS idx_news_cluster_rep
+    ON news_items (cluster_rep_id);
+
+-- Cluster-size-based rankings ("top stories")
+CREATE INDEX IF NOT EXISTS idx_news_cluster_size_desc
+    ON news_items (cluster_size DESC, last_seen_at DESC);
 
 -- Sentiment filtering
 CREATE INDEX IF NOT EXISTS idx_news_sentiment_label

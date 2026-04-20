@@ -139,6 +139,31 @@ class NewsItem(Base):
     )
 
     # ------------------------------------------------------------------
+    # Clustering (maintained by finradar.tasks.collection_tasks.cluster_news)
+    # ------------------------------------------------------------------
+    cluster_rep_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("news_items.id", ondelete="SET NULL"),
+        nullable=True,
+        comment=(
+            "Representative article of this row's cluster (NULL for singletons). "
+            "When cluster_rep_id == id, this row IS the cluster representative."
+        ),
+    )
+    cluster_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+        comment="Cached count of articles in the cluster (1 for singletons).",
+    )
+    similarity_to_rep: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Cosine similarity to the cluster representative (1.0 for the rep itself).",
+    )
+
+    # ------------------------------------------------------------------
     # Audit timestamps
     # ------------------------------------------------------------------
     created_at: Mapped[datetime] = mapped_column(

@@ -144,11 +144,61 @@ st.divider()
 
 
 # ---------------------------------------------------------------------------
+# 클러스터 형제 — 주기 태스크가 묶은 "같은 스토리" 기사들
+# ---------------------------------------------------------------------------
+
+cluster_size = article.get("cluster_size", 1)
+cluster_rep_id = article.get("cluster_rep_id")
+
+if cluster_rep_id is not None and cluster_size and cluster_size >= 2:
+    st.subheader(f"🧩 같은 스토리 ({cluster_size}건)")
+    st.caption(
+        "30분 주기 클러스터링이 묶은 '같은 사건'의 다른 보도. "
+        "대표 기사 기준 cosine 유사도 내림차순."
+    )
+
+    with st.spinner("클러스터 멤버 조회 중..."):
+        cluster_data = api_client.get_cluster_siblings(news_id)
+
+    if "error" in cluster_data:
+        st.error(f"클러스터 조회 실패: {cluster_data['error']}")
+    else:
+        siblings = [x for x in cluster_data.get("items", []) if x.get("id") != news_id]
+        for s in siblings:
+            with st.container(border=True):
+                lc, rc = st.columns([7, 2])
+                with lc:
+                    st.markdown(
+                        f"**[{s.get('title', '')[:100]}]({s.get('url', '#')})**"
+                    )
+                    meta = [
+                        _sent_badge(s.get("sentiment_label"), s.get("sentiment")),
+                        f"🌏 {s.get('language') or '?'}",
+                        f"📅 {_fmt_ts(s.get('last_seen_at'))}",
+                    ]
+                    if s.get("tickers"):
+                        meta.append("💹 " + ", ".join(s["tickers"][:3]))
+                    if s.get("sectors"):
+                        meta.append("🏷️ " + ", ".join(s["sectors"][:3]))
+                    st.caption("  ·  ".join(meta))
+                with rc:
+                    sim = s.get("similarity_to_rep")
+                    if sim is not None:
+                        st.metric("유사도", f"{sim:.3f}")
+                    st.markdown(f"[상세 →](?news_id={s.get('id')})")
+
+    st.divider()
+
+
+# ---------------------------------------------------------------------------
 # 유사 기사 — 이 기사 제목을 쿼리로 하이브리드 검색
 # ---------------------------------------------------------------------------
 
 st.subheader("🔗 유사 기사 (하이브리드 검색 기반)")
-st.caption("이 기사의 제목을 쿼리로 재검색. 원 기사는 제외.")
+st.caption(
+    "이 기사의 제목을 쿼리로 재검색. 위의 '같은 스토리'보다 느슨한 기준이며 "
+    "다른 각도의 관련 기사를 보여줍니다."
+)
 
 with st.spinner("유사 기사 검색 중..."):
     similar = api_client.search(

@@ -43,6 +43,20 @@ class NewsItemResponse(BaseModel):
     hit_count: int
     created_at: datetime
 
+    # --- Clustering (Phase 2 news grouping) ---------------------------------
+    cluster_rep_id: int | None = Field(
+        default=None,
+        description="ID of the representative article of this row's cluster. NULL for singletons.",
+    )
+    cluster_size: int = Field(
+        default=1,
+        description="Number of articles in the same cluster (1 for singletons).",
+    )
+    similarity_to_rep: float | None = Field(
+        default=None,
+        description="Cosine similarity to the cluster representative (1.0 for the rep itself).",
+    )
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -162,6 +176,15 @@ class SearchRequest(BaseModel):
     include_scores: bool = Field(
         default=False,
         description="Include per-signal score breakdown in the response items",
+    )
+    dedup: bool = Field(
+        default=False,
+        description=(
+            "When true, suppress duplicate articles within a cluster — only "
+            "cluster representatives and singletons are returned. Default is "
+            "false for search (users usually want to see all matches); the feed "
+            "endpoint defaults to true."
+        ),
     )
     # --- Hybrid ranking tunables (override settings defaults per-request) ---
     weight_bm25: float | None = Field(

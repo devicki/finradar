@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finradar.api.deps import CommonFilters, DbSession, PaginationParams, _apply_common_filters
@@ -48,17 +48,39 @@ router = APIRouter()
     description=(
         "Return the latest news items sorted by `last_seen_at` descending. "
         "Phase 1: ordering is purely chronological.  "
-        "Phase 3 will incorporate personal_boost from user feedback."
+        "Phase 3 will incorporate personal_boost from user feedback. "
+        "Dedup defaults to TRUE for the feed: only cluster representatives "
+        "(and singletons) are returned so the same story isn't repeated."
     ),
 )
 async def get_feed(
     db: DbSession,
     pagination: Annotated[PaginationParams, Depends(PaginationParams)],
     filters: Annotated[CommonFilters, Depends(CommonFilters)],
+    dedup: bool = Query(
+        default=True,
+        description=(
+            "When true (default), suppress duplicate articles within a cluster — "
+            "only the cluster representative (or singletons) are returned."
+        ),
+    ),
 ) -> NewsListResponse:
+    # Dedup predicate: keep singletons (cluster_rep_id IS NULL) and cluster reps
+    # (cluster_rep_id = id).  Uses the idx_news_cluster_rep index for fast scans.
+    def _apply_dedup(stmt):
+        if not dedup:
+            return stmt
+        return stmt.where(
+            or_(
+                NewsItem.cluster_rep_id.is_(None),
+                NewsItem.cluster_rep_id == NewsItem.id,
+            )
+        )
+
     # Count
     count_stmt = select(func.count()).select_from(NewsItem)
     count_stmt = _apply_common_filters(count_stmt, filters)
+    count_stmt = _apply_dedup(count_stmt)
     total: int = (await db.execute(count_stmt)).scalar_one()
 
     # Data — most recent first
@@ -69,6 +91,7 @@ async def get_feed(
         .limit(pagination.page_size)
     )
     data_stmt = _apply_common_filters(data_stmt, filters)
+    data_stmt = _apply_dedup(data_stmt)
     rows = (await db.execute(data_stmt)).scalars().all()
 
     return NewsListResponse(

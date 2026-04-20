@@ -60,6 +60,12 @@ with st.sidebar.expander("페이지네이션", expanded=False):
     page = st.number_input("페이지", min_value=1, value=1, step=1)
     page_size = st.select_slider("페이지당", options=[5, 10, 20, 50], value=20)
 
+dedup = st.sidebar.toggle(
+    "중복 제거 (클러스터 대표만)",
+    value=False,
+    help="같은 클러스터의 여러 기사 중 대표 1건만 표시",
+)
+
 search_clicked = st.sidebar.button("🔎 검색 실행", type="primary", use_container_width=True)
 
 
@@ -118,6 +124,7 @@ with st.spinner("하이브리드 검색 중..."):
         tickers=_parse_list(ticker_input),
         sectors=_parse_list(sector_input),
         include_scores=True,
+        dedup=dedup,
         weight_bm25=w_bm25,
         weight_cosine=w_cos,
         weight_recency=w_rec,
@@ -226,6 +233,29 @@ for i, item in enumerate(items, start=1 + (int(page) - 1) * int(page_size)):
             if item.get("sectors"):
                 meta_parts.append("🏷️ " + ", ".join(item["sectors"][:5]))
             st.caption("  ·  ".join(meta_parts))
+
+            # 클러스터 siblings 인라인 펼치기 (2건 이상일 때만)
+            cluster_size = item.get("cluster_size", 1)
+            if cluster_size and cluster_size >= 2:
+                with st.expander(f"🧩 같은 스토리 {cluster_size}건 펼쳐보기", expanded=False):
+                    cluster_data = api_client.get_cluster_siblings(item["id"])
+                    if "error" in cluster_data:
+                        st.error(f"클러스터 조회 실패: {cluster_data['error']}")
+                    else:
+                        siblings = [
+                            s for s in cluster_data.get("items", [])
+                            if s.get("id") != item["id"]
+                        ]
+                        if not siblings:
+                            st.caption("형제 기사 없음")
+                        for s in siblings:
+                            sim = s.get("similarity_to_rep")
+                            sim_str = f"`{sim:.3f}`" if sim is not None else "-"
+                            st.markdown(
+                                f"- {sim_str} "
+                                f"[{s.get('title', '')[:100]}]({s.get('url', '#')})  "
+                                f"([상세](?news_id={s.get('id')}))"
+                            )
 
         with right:
             # 점수 breakdown

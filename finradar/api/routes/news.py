@@ -207,3 +207,56 @@ async def get_news_item(news_id: int, db: DbSession) -> NewsItemResponse:
             detail=f"NewsItem with id={news_id} not found.",
         )
     return NewsItemResponse.model_validate(item)
+
+
+# ---------------------------------------------------------------------------
+# GET /{news_id}/cluster
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{news_id}/cluster",
+    response_model=NewsListResponse,
+    summary="Cluster siblings of a news item",
+    description=(
+        "Return every article that shares a cluster with the given news item, "
+        "sorted by cosine similarity to the cluster representative. "
+        "If the item is a singleton (cluster_rep_id is NULL), the response "
+        "contains just itself with total=1."
+    ),
+)
+async def get_news_cluster(news_id: int, db: DbSession) -> NewsListResponse:
+    # Resolve the target item
+    item_stmt = select(NewsItem).where(NewsItem.id == news_id)
+    item = (await db.execute(item_stmt)).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"NewsItem with id={news_id} not found.",
+        )
+
+    # Singleton → just the item itself
+    if item.cluster_rep_id is None:
+        return NewsListResponse(
+            items=[NewsItemResponse.model_validate(item)],
+            total=1,
+            page=1,
+            page_size=1,
+        )
+
+    # Fetch all siblings (including the representative itself)
+    siblings_stmt = (
+        select(NewsItem)
+        .where(NewsItem.cluster_rep_id == item.cluster_rep_id)
+        .order_by(
+            NewsItem.similarity_to_rep.desc().nullslast(),
+            NewsItem.last_seen_at.desc(),
+        )
+    )
+    rows = (await db.execute(siblings_stmt)).scalars().all()
+    return NewsListResponse(
+        items=[NewsItemResponse.model_validate(r) for r in rows],
+        total=len(rows),
+        page=1,
+        page_size=len(rows) or 1,
+    )

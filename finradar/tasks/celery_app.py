@@ -105,6 +105,14 @@ celery_app.conf.beat_schedule = {
         "schedule": 600,  # 10 minutes
         "options": {"queue": "finradar"},
     },
+    # Story grouping — connected components over cosine similarity.
+    # Runs every 30 minutes so new articles get their cluster assignment
+    # without blowing CPU on every collection cycle.
+    "cluster-news-every-30min": {
+        "task": "finradar.tasks.collection_tasks.cluster_news",
+        "schedule": 1800,  # 30 minutes
+        "options": {"queue": "finradar"},
+    },
 }
 
 logger.info(

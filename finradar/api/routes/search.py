@@ -112,19 +112,24 @@ def _build_hybrid_sql(request: SearchRequest, use_to_tsquery: bool) -> text:
     # (parameterised via SQLAlchemy .bindparams() to avoid injection)
     filter_sql: list[str] = []
     if request.source_type:
-        filter_sql.append("AND source_type = :source_type")
+        filter_sql.append("AND n.source_type = :source_type")
     if request.language:
-        filter_sql.append("AND language = :language")
+        filter_sql.append("AND n.language = :language")
     if request.sentiment_label:
-        filter_sql.append("AND sentiment_label = :sentiment_label")
+        filter_sql.append("AND n.sentiment_label = :sentiment_label")
     if request.tickers:
-        filter_sql.append("AND tickers @> :tickers")
+        filter_sql.append("AND n.tickers @> :tickers")
     if request.sectors:
-        filter_sql.append("AND sectors @> :sectors")
+        filter_sql.append("AND n.sectors @> :sectors")
     if request.date_from:
-        filter_sql.append("AND first_seen_at >= :date_from")
+        filter_sql.append("AND n.first_seen_at >= :date_from")
     if request.date_to:
-        filter_sql.append("AND first_seen_at <= :date_to")
+        filter_sql.append("AND n.first_seen_at <= :date_to")
+    if request.dedup:
+        # Keep singletons and representatives only
+        filter_sql.append(
+            "AND (n.cluster_rep_id IS NULL OR n.cluster_rep_id = n.id)"
+        )
 
     filters_clause = "\n          ".join(filter_sql)
 

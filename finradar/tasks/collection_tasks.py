@@ -872,3 +872,75 @@ def reconcile_pending_llm(self: Task) -> dict[str, Any]:
     enrich_group.apply_async()
 
     return {"status": "ok", "requeued": len(candidate_ids)}
+
+
+# ---------------------------------------------------------------------------
+# Task: cluster_news — periodic story-grouping over recent articles
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    bind=True,
+    name="finradar.tasks.collection_tasks.cluster_news",
+    max_retries=1,
+    default_retry_delay=120,
+)
+def cluster_news(
+    self: Task,
+    window_days: int | None = None,
+    threshold: float | None = None,
+) -> dict[str, Any]:
+    """Group recent articles into clusters via cosine-similarity connected components.
+
+    Scheduled every 30 minutes by Celery Beat. See
+    :py:func:`finradar.clustering.cluster_recent_articles` for the algorithm.
+
+    Parameters
+    ----------
+    window_days:
+        Overrides :py:data:`finradar.clustering.DEFAULT_WINDOW_DAYS` (7d).
+    threshold:
+        Overrides :py:data:`finradar.clustering.DEFAULT_COSINE_THRESHOLD` (0.80).
+    """
+    from finradar.clustering import (  # noqa: PLC0415 — lazy to avoid import cost
+        DEFAULT_COSINE_THRESHOLD,
+        DEFAULT_WINDOW_DAYS,
+        cluster_recent_articles,
+    )
+
+    w = window_days if window_days is not None else DEFAULT_WINDOW_DAYS
+    t = threshold if threshold is not None else DEFAULT_COSINE_THRESHOLD
+
+    logger.info(
+        "cluster_news: starting (window=%dd, threshold=%.2f)", w, t
+    )
+    self.update_state(state="STARTED", meta={"stage": "clustering"})
+
+    try:
+        with SyncSessionLocal() as session:
+            result = cluster_recent_articles(
+                session, window_days=w, threshold=t
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("cluster_news: failed — %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+    logger.info(
+        "cluster_news: ok — considered=%d, edges=%d, clusters=%d, "
+        "largest=%d, updated=%d, elapsed=%.1fs",
+        result.articles_considered,
+        result.edges_found,
+        result.non_singleton_clusters,
+        result.largest_cluster_size,
+        result.updated_rows,
+        result.elapsed_sec,
+    )
+    return {
+        "status": "ok",
+        "articles_considered": result.articles_considered,
+        "edges_found": result.edges_found,
+        "non_singleton_clusters": result.non_singleton_clusters,
+        "largest_cluster_size": result.largest_cluster_size,
+        "updated_rows": result.updated_rows,
+        "elapsed_sec": round(result.elapsed_sec, 2),
+    }
