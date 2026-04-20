@@ -144,6 +144,34 @@ _ENRICH_ALL_SYSTEM = (
     "\"tickers\": [\"NVDA\"], \"sectors\": [\"반도체\", \"AI\"]}"
 )
 
+# 한국어 기사 전용 enrich 프롬프트. 이미 한국어라 번역은 불필요하며, 요약도
+# 한국어로 생성한다. 응답 JSON 스키마는 영어 프롬프트와 호환되도록 동일한
+# 키셋을 유지하되 translated_title / translated_summary는 빈 문자열을 반환한다.
+_ENRICH_KO_SYSTEM = (
+    "당신은 시니어 금융 뉴스 애널리스트입니다. "
+    "주어진 한국어 금융 뉴스 기사에 대해 다음 작업을 단일 응답으로 수행하세요.\n\n"
+    "반드시 다음 키를 가진 유효한 JSON 객체 하나만 반환하세요:\n"
+    "  \"ai_summary\": 한국어로 2~3문장 요약. 핵심 사실, 정량적 수치(주가, 퍼센트, 실적), "
+    "주요 시장/섹터 영향에 집중하세요. "
+    "중요: 기사에 명시된 정보만 사용하세요. 없는 사실·수치·맥락을 추가하지 마세요. "
+    "기사가 너무 짧으면 원문을 그대로 반환하세요.\n"
+    "  \"translated_title\": 빈 문자열 \"\" (한국어 기사이므로 번역 불필요)\n"
+    "  \"translated_summary\": 빈 문자열 \"\" (한국어 기사이므로 번역 불필요)\n"
+    "  \"tickers\": 기사에서 언급된 대문자 티커 심볼 배열 "
+    "(예: [\"AAPL\", \"005930.KS\"]). 없으면 빈 배열 [].\n"
+    "  \"sectors\": 한국어 섹터/테마 배열 "
+    "(예: [\"반도체\", \"AI\", \"바이오\", \"에너지\"]). 없으면 빈 배열 [].\n\n"
+    "규칙:\n"
+    "  - 전문적이고 간결한 금융 언어를 사용하세요.\n"
+    "  - 티커, 숫자, 퍼센트, 통화 기호는 원문 그대로 유지하세요.\n"
+    "  - JSON 객체만 반환하세요. 마크다운, 설명, 추가 텍스트 금지.\n\n"
+    "예시 출력:\n"
+    "{\"ai_summary\": \"삼성전자가 3분기 매출 79조원을 기록하며 전년 동기 대비 17% 증가했다. "
+    "반도체 부문이 실적을 견인했다.\", "
+    "\"translated_title\": \"\", \"translated_summary\": \"\", "
+    "\"tickers\": [\"005930.KS\"], \"sectors\": [\"반도체\", \"AI\"]}"
+)
+
 
 class LLMProcessor:
     """Cloud LLM processor for summarisation, translation, and metadata extraction.
@@ -503,6 +531,12 @@ class LLMProcessor:
     ) -> dict[str, Any]:
         """Summarize, translate, and extract metadata in a single LLM call.
 
+        Branches by article language:
+          - Korean articles use ``_ENRICH_KO_SYSTEM`` — Korean summary, no
+            translation (translated_* fields return empty).
+          - All other languages use ``_ENRICH_ALL_SYSTEM`` — English summary
+            plus Korean translation.
+
         Returns a dict with keys: ai_summary, translated_title,
         translated_summary, tickers, sectors.  Missing fields default
         to empty string / empty list.
@@ -515,16 +549,25 @@ class LLMProcessor:
         Raises:
             RuntimeError: If the underlying LLM call fails.
         """
-        user_message = (
-            f"Title: {title}\n\n"
-            f"Article:\n{content[:2000]}"
+        if language == "ko":
+            system_prompt = _ENRICH_KO_SYSTEM
+            user_message = (
+                f"제목: {title}\n\n"
+                f"기사:\n{content[:2000]}"
+            )
+        else:
+            system_prompt = _ENRICH_ALL_SYSTEM
+            user_message = (
+                f"Title: {title}\n\n"
+                f"Article:\n{content[:2000]}"
+            )
+            if language != "en":
+                user_message += f"\n\nNote: The source language is '{language}'."
+
+        self.logger.debug(
+            "Enriching article in single call (lang=%s): %r", language, title[:80]
         )
-
-        if language != "en":
-            user_message += f"\n\nNote: The source language is '{language}'."
-
-        self.logger.debug("Enriching article in single call: %r", title[:80])
-        raw_response = await self._call_llm(_ENRICH_ALL_SYSTEM, user_message)
+        raw_response = await self._call_llm(system_prompt, user_message)
         parsed = self._parse_enrich_response(raw_response, title)
         self.logger.debug(
             "Enrichment complete — summary=%d chars, tickers=%s, sectors=%s",

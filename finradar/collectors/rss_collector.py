@@ -4,6 +4,16 @@ Fetches a configurable list of financial RSS feeds concurrently, parses them
 with feedparser (which handles the wide variety of date formats used by
 different publishers), and maps each entry to a :py:class:`CollectedArticle`.
 
+Two post-parse steps normalise messy real-world feeds:
+
+1. :py:func:`clean_rss_text` strips HTML tags, decodes HTML entities, and
+   normalises whitespace on both titles and summaries. Applied universally
+   (EN + KO) since multiple feeds ship HTML-polluted payloads.
+
+2. A body-fetch fallback uses ``trafilatura`` to extract full article text
+   when the RSS summary is too short to be useful (common with 한국경제,
+   서울경제 which publish title-only feeds).
+
 Usage::
 
     async with RSSCollector() as collector:
@@ -11,17 +21,46 @@ Usage::
 """
 
 import asyncio
+import html
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
 import feedparser
 import httpx
+import trafilatura
 
 from finradar.collectors.base import BaseCollector, CollectedArticle
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Text-cleaning constants
+# ---------------------------------------------------------------------------
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+# 한경(hankyung.com) 기사 본문에 반복 등장하는 UI 버튼 텍스트
+_HANKYUNG_UI_NOISE = re.compile(
+    r"\s*-\s*기사\s*스크랩\s*-\s*공유\s*-\s*댓글\s*-\s*클린뷰\s*-\s*프린트\s*"
+)
+
+# Summary below this length triggers trafilatura body-fetch fallback
+_MIN_SUMMARY_LEN: int = 50
+
+# Browser-like UA for article page fetches (some sites block default UAs)
+_BODY_FETCH_UA: str = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+_BODY_FETCH_TIMEOUT: float = 15.0
+
+# Max concurrent article-page fetches for the body enrichment pass
+_BODY_FETCH_CONCURRENCY: int = 10
+
 
 # ---------------------------------------------------------------------------
 # Default feed list
@@ -91,11 +130,6 @@ DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
         "language": "ko",
     },
     {
-        "url": "https://www.yonhapnewseconomytv.com/rss/allArticle.xml",
-        "name": "연합뉴스경제TV 전체",
-        "language": "ko",
-    },
-    {
         "url": "https://www.sedaily.com/rss/Economy",
         "name": "서울경제 경제",
         "language": "ko",
@@ -106,6 +140,40 @@ DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
         "language": "ko",
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Text-cleaning helper (module-level so it can be reused / unit-tested)
+# ---------------------------------------------------------------------------
+
+
+def clean_rss_text(text: str | None, source_hint: str = "") -> str:
+    """Strip HTML tags/entities and normalise whitespace from RSS text.
+
+    Applied universally to titles and summaries from every feed (EN + KO).
+    Many publishers ship HTML-laden payloads (``<table>``, ``<img>``,
+    ``&amp;``, ``&#039;`` …) which waste LLM tokens and degrade summary quality.
+
+    Args:
+        text:        Raw text pulled from a feedparser entry.
+        source_hint: URL of the feed or article; used to trigger source-specific
+                     cleanup rules (e.g. 한경 UI button text).
+
+    Returns:
+        Cleaned text with all HTML stripped, entities decoded, and collapsed
+        whitespace.  Returns an empty string for ``None`` / empty input.
+    """
+    if not text:
+        return ""
+    cleaned = _HTML_TAG_RE.sub(" ", text)
+    cleaned = html.unescape(cleaned)
+    cleaned = _WS_RE.sub(" ", cleaned).strip()
+
+    if source_hint and "hankyung.com" in source_hint:
+        cleaned = _HANKYUNG_UI_NOISE.sub(" ", cleaned)
+        cleaned = _WS_RE.sub(" ", cleaned).strip()
+
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -133,24 +201,44 @@ class RSSCollector(BaseCollector):
     ) -> None:
         super().__init__(name="rss", max_concurrent=max_concurrent)
         self.feeds = feeds if feeds is not None else DEFAULT_RSS_FEEDS
+        # Body-fetch uses its own semaphore so it doesn't contend with the
+        # feed-fetch semaphore and can run with higher parallelism.
+        self._body_semaphore = asyncio.Semaphore(_BODY_FETCH_CONCURRENCY)
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     async def collect(self) -> list[CollectedArticle]:
-        """Fetch all configured feeds concurrently and return merged articles."""
+        """Fetch all configured feeds concurrently and return merged articles.
+
+        After parsing all feeds, any article whose summary is shorter than
+        :py:data:`_MIN_SUMMARY_LEN` has its body fetched via trafilatura as a
+        fallback.  This rescues sources like 한국경제 / 서울경제 whose RSS
+        feeds ship only titles.
+        """
         tasks = [self._fetch_feed(feed) for feed in self.feeds]
         results: list[list[CollectedArticle]] = await asyncio.gather(
             *tasks, return_exceptions=False
         )
-        all_articles: list[CollectedArticle] = []
-        for batch in results:
-            all_articles.extend(batch)
+        all_articles: list[CollectedArticle] = [a for batch in results for a in batch]
+
+        # Body-fetch fallback: enrich articles with thin RSS summaries.
+        needs_body = [
+            a for a in all_articles if len(a.summary or "") < _MIN_SUMMARY_LEN
+        ]
+        if needs_body:
+            self.logger.info(
+                "Body-fetch fallback: %d / %d articles need full-body extraction",
+                len(needs_body),
+                len(all_articles),
+            )
+            await self._enrich_bodies(needs_body)
+
         return all_articles
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Internal helpers — feed-level
     # ------------------------------------------------------------------
 
     async def _fetch_feed(self, feed_config: dict[str, str]) -> list[CollectedArticle]:
@@ -215,8 +303,10 @@ class RSSCollector(BaseCollector):
         Returns ``None`` if the entry lacks a title or a URL (both are
         required for deduplication downstream).
         """
+        source_hint = feed_config["url"]
+
         # ---- Required fields --------------------------------------------------
-        title: str | None = _get_text(entry, "title")
+        title = clean_rss_text(_get_text(entry, "title"), source_hint=source_hint)
         if not title:
             return None
 
@@ -225,7 +315,8 @@ class RSSCollector(BaseCollector):
             return None
 
         # ---- Optional fields --------------------------------------------------
-        summary: str | None = _get_text(entry, "summary") or _get_text(entry, "description")
+        summary_raw = _get_text(entry, "summary") or _get_text(entry, "description")
+        summary = clean_rss_text(summary_raw, source_hint=source_hint)
 
         published_at: datetime | None = _parse_published(entry)
 
@@ -234,8 +325,8 @@ class RSSCollector(BaseCollector):
 
         # ---- Build article ----------------------------------------------------
         return CollectedArticle(
-            title=title.strip(),
-            summary=summary.strip() if summary else None,
+            title=title,
+            summary=summary or None,
             url=url.strip(),
             source_url=feed_config["url"],
             source_type="rss",
@@ -245,6 +336,71 @@ class RSSCollector(BaseCollector):
             sectors=[],
             raw_data=dict(entry),
         )
+
+    # ------------------------------------------------------------------
+    # Internal helpers — body-fetch fallback
+    # ------------------------------------------------------------------
+
+    async def _enrich_bodies(self, articles: list[CollectedArticle]) -> None:
+        """Concurrently fetch article bodies via trafilatura for short-summary items.
+
+        Updates ``article.summary`` in place on success. Failures are swallowed
+        so a single broken URL does not block the rest of the collection pass.
+        """
+        await asyncio.gather(
+            *(self._fetch_body(a) for a in articles),
+            return_exceptions=True,
+        )
+
+    async def _fetch_body(self, article: CollectedArticle) -> None:
+        """Fetch article URL, extract body with trafilatura, update summary.
+
+        Silently logs (at debug) and returns on any error so the main pipeline
+        keeps the original (short) summary as a fallback.
+        """
+        async with self._body_semaphore:
+            try:
+                client = await self.get_client()
+                response = await client.get(
+                    article.url,
+                    timeout=_BODY_FETCH_TIMEOUT,
+                    headers={"User-Agent": _BODY_FETCH_UA},
+                    follow_redirects=True,
+                )
+                response.raise_for_status()
+                html_text: str = response.text
+            except (httpx.HTTPError, httpx.RequestError) as exc:
+                self.logger.debug(
+                    "Body-fetch HTTP error for %s: %s", article.url, exc
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                self.logger.debug(
+                    "Body-fetch unexpected error for %s: %s", article.url, exc
+                )
+                return
+
+        # trafilatura is C-backed lxml; ~10ms per article. Fine to run on the
+        # event loop thread without offloading.
+        try:
+            extracted = trafilatura.extract(
+                html_text,
+                include_comments=False,
+                include_tables=False,
+                favor_precision=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.logger.debug(
+                "Trafilatura extraction failed for %s: %s", article.url, exc
+            )
+            return
+
+        if not extracted:
+            return
+
+        cleaned = clean_rss_text(extracted, source_hint=article.url)
+        if len(cleaned) >= _MIN_SUMMARY_LEN:
+            article.summary = cleaned
 
 
 # ---------------------------------------------------------------------------

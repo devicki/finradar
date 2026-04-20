@@ -98,10 +98,12 @@ _SENTIMENT_BATCH_SIZE: int = settings.sentiment_batch_size  # default 32
 _EMBEDDING_BATCH_SIZE: int = settings.embedding_batch_size  # default 64
 _MAX_ITEMS_PER_PROCESSING_RUN: int = 200
 
-# Only trigger LLM enrichment automatically for articles in English.
-# Korean items are usually already in the user's language; others are
-# enriched on-demand via the API.
-_LLM_AUTO_ENRICH_LANGUAGES: frozenset[str] = frozenset({"en"})
+# Languages eligible for automatic LLM enrichment on the collection pipeline.
+# English articles receive a full EN summary + Korean translation. Korean
+# articles use a KO-only prompt that skips translation (see llm_processor
+# _ENRICH_KO_SYSTEM) and produces a Korean ai_summary plus tickers/sectors.
+# Other languages are enriched on-demand via the API only.
+_LLM_AUTO_ENRICH_LANGUAGES: frozenset[str] = frozenset({"en", "ko"})
 
 # Minimum absolute sentiment score to qualify for LLM enrichment.
 # FinBERT is trained on financial text — non-financial articles tend to
