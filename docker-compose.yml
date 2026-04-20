@@ -107,6 +107,35 @@ services:
               capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
+  # Streamlit dashboard (dev/debug UI)
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dashboard calls the API over the internal docker network
+      FINRADAR_API_URL: http://app:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - app
+    command: >-
+      streamlit run /app/dashboard/main.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.runOnSave true
+      --browser.gatherUsageStats false
+    volumes:
+      - .:/app
+    networks:
+      - finradar-net
+
+  # ---------------------------------------------------------------------------
   # Celery Beat scheduler (periodic news collection)
   # ---------------------------------------------------------------------------
   celery_beat:

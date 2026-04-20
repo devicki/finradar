@@ -90,6 +90,23 @@ class NewsItemSearchResponse(NewsItemResponse):
     )
 
 
+class QueryExpansionInfo(BaseModel):
+    """Diagnostic info about synonym expansion applied to the FTS query.
+
+    Present when the original query contained tokens matching the
+    :py:data:`finradar.search.query_expansion.SYNONYMS` dictionary. The
+    dashboard uses ``expanded_tokens`` to show users which synonyms were
+    added and ``tsquery_expr`` for debugging FTS matching behaviour.
+    """
+
+    original: str = Field(..., description="Original user query")
+    tsquery_expr: str = Field(..., description="Generated to_tsquery expression")
+    expanded_tokens: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Mapping of input token → added synonyms (excluding the token itself)",
+    )
+
+
 class NewsSearchListResponse(BaseModel):
     """Paginated hybrid-search response."""
 
@@ -97,6 +114,10 @@ class NewsSearchListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    query_expansion: QueryExpansionInfo | None = Field(
+        default=None,
+        description="Synonym-expansion info (None if no expansion applied)",
+    )
 
 
 class SearchRequest(BaseModel):

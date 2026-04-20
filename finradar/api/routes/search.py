@@ -43,9 +43,11 @@ from finradar.models import NewsItem
 from finradar.schemas import (
     NewsItemSearchResponse,
     NewsSearchListResponse,
+    QueryExpansionInfo,
     ScoreBreakdown,
     SearchRequest,
 )
+from finradar.search import expand_query
 
 router = APIRouter()
 
@@ -89,15 +91,19 @@ async def _embed_query(text_value: str, embedder: Any) -> list[float]:
     return await loop.run_in_executor(None, embedder.generate, text_value)
 
 
-def _build_hybrid_sql(request: SearchRequest) -> text:
+def _build_hybrid_sql(request: SearchRequest, use_to_tsquery: bool) -> text:
     """Build the parameterised hybrid-search SQL statement.
 
     Parameters expected at execution time:
-      * ``q_text``   — the raw user query (plainto_tsquery input)
-      * ``q_vec``    — the 384-dim query embedding (pgvector literal)
-      * ``offset``   — pagination offset
-      * ``limit``    — pagination limit
-      * ``w_bm25``, ``w_cos``, ``w_rec`` — ranking weights
+      * ``q_text``   — the query text.
+                       - When ``use_to_tsquery`` is True: a synonym-expanded
+                         ``to_tsquery`` expression like
+                         ``('오일' | '유가') & '가격' & '상승'``.
+                       - When False: the raw user query for ``plainto_tsquery``.
+      * ``q_vec``    — the 384-dim query embedding (pgvector literal).
+      * ``offset``   — pagination offset.
+      * ``limit``    — pagination limit.
+      * ``w_bm25``, ``w_cos``, ``w_rec`` — ranking weights.
 
     Optional filter parameters are bound only when the corresponding field
     is provided in ``request``; unused placeholders are left off the SQL.
@@ -122,12 +128,17 @@ def _build_hybrid_sql(request: SearchRequest) -> text:
 
     filters_clause = "\n          ".join(filter_sql)
 
+    # When synonym expansion is applied, use to_tsquery with the composed
+    # expression; otherwise stick with the forgiving plainto_tsquery which
+    # auto-escapes any special characters in the raw user query.
+    ts_fn = "to_tsquery" if use_to_tsquery else "plainto_tsquery"
+
     # --- Hybrid query --------------------------------------------------------
     # Use CAST(:q_vec AS vector) so pgvector parses the embedding literal.
     # The cosine-distance operator is <=>; similarity = 1 - distance.
     sql = f"""
     WITH q AS (
-        SELECT plainto_tsquery('english', :q_text) AS ts,
+        SELECT {ts_fn}('english', :q_text) AS ts,
                CAST(:q_vec AS vector)              AS vec
     ),
     candidates AS (
@@ -212,20 +223,26 @@ async def search_news(
     request: SearchRequest, db: DbSession, embedder: EmbeddingDep
 ) -> NewsSearchListResponse:
     # ---- 1. Generate query embedding (thread-pooled) -----------------------
+    # Embed the *original* user query so cosine semantics stay natural;
+    # synonym expansion applies only to FTS token matching.
     query_vec = await _embed_query(request.query, embedder)
 
     # pgvector accepts a string literal like "[0.1,0.2,…]" — quick format.
     q_vec_literal = "[" + ",".join(f"{v:.6f}" for v in query_vec) + "]"
 
-    # ---- 2. Resolve weights ------------------------------------------------
+    # ---- 2. Expand query for FTS ------------------------------------------
+    expansion = expand_query(request.query)
+    ts_text = expansion.tsquery_expr if expansion.use_to_tsquery else request.query
+
+    # ---- 3. Resolve weights ------------------------------------------------
     w_bm25, w_cos, w_rec = _resolve_weights(request)
 
-    # ---- 3. Execute hybrid SQL --------------------------------------------
-    stmt = _build_hybrid_sql(request)
+    # ---- 4. Execute hybrid SQL --------------------------------------------
+    stmt = _build_hybrid_sql(request, use_to_tsquery=expansion.use_to_tsquery)
 
     offset = (request.page - 1) * request.page_size
     params: dict[str, Any] = {
-        "q_text": request.query,
+        "q_text": ts_text,
         "q_vec": q_vec_literal,
         "vec_threshold": _VECTOR_CANDIDATE_THRESHOLD,
         "half_life_days": _RECENCY_HALF_LIFE_DAYS,
@@ -275,9 +292,20 @@ async def search_news(
             )
         items.append(NewsItemSearchResponse.model_validate(payload))
 
+    # Attach expansion diagnostics only when synonyms were actually added
+    # (keeps responses compact for simple queries).
+    expansion_info: QueryExpansionInfo | None = None
+    if expansion.expanded_tokens:
+        expansion_info = QueryExpansionInfo(
+            original=expansion.original,
+            tsquery_expr=expansion.tsquery_expr,
+            expanded_tokens=expansion.expanded_tokens,
+        )
+
     return NewsSearchListResponse(
         items=items,
         total=total,
         page=request.page,
         page_size=request.page_size,
+        query_expansion=expansion_info,
     )

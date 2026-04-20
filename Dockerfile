@@ -57,7 +57,11 @@ RUN python -m venv /opt/venv && \
         # Utilities
         "python-dotenv>=1.0.0" \
         "trafilatura>=1.6.0" \
-        "pdfplumber>=0.10.0"
+        "pdfplumber>=0.10.0" \
+        # Dashboard (dev/debugging UI)
+        "streamlit>=1.30.0" \
+        "plotly>=5.18.0" \
+        "pandas>=2.1.0"
 
 # ---------------------------------------------------------------------------
 # Stage 2: runtime — lean final image
