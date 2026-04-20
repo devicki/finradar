@@ -81,6 +81,58 @@ class Settings(BaseSettings):
     polygon_api_key: str = Field(default="", description="Polygon.io API key")
 
     # -------------------------------------------------------------------------
+    # X (Twitter) API — pay-as-you-go at $0.005 per read
+    # -------------------------------------------------------------------------
+    x_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable X (Twitter) collector. When false OR x_bearer_token is empty, "
+            "the X Celery task skips itself gracefully — no API calls, no cost."
+        ),
+    )
+    x_bearer_token: str = Field(
+        default="",
+        description="X API v2 bearer token (App-only context is sufficient for timeline reads)",
+    )
+    x_tracked_accounts: str = Field(
+        default="markets,business,BloombergTV",
+        description=(
+            "Comma-separated X usernames to follow (without @). Each account is polled "
+            "on every collect_x_posts run; new tweets since last_seen_id are ingested."
+        ),
+    )
+    x_collect_interval_min: int = Field(
+        default=10,
+        ge=1,
+        description="Minutes between collect_x_posts runs (lower = lower latency, higher cost)",
+    )
+    x_max_tweets_per_account: int = Field(
+        default=50,
+        ge=5,
+        le=100,
+        description="Max tweets to fetch per account per run (X API limits this to 100)",
+    )
+    x_monthly_budget_usd: float = Field(
+        default=30.0,
+        ge=0.0,
+        description=(
+            "Hard monthly spend cap in USD. When the Redis-tracked running total "
+            "reaches this threshold, collect_x_posts stops making API calls until "
+            "the next calendar month."
+        ),
+    )
+    x_cost_per_read_usd: float = Field(
+        default=0.0053,
+        ge=0.0,
+        description=(
+            "Current X API billed price per tweet resource. The posted X pricing is "
+            "$0.005/resource but observed billing on small test runs is ~$0.0053 because "
+            "requested tweet fields (entities, referenced_tweets, ...) count as additional "
+            "resources. Update empirically when X changes pricing."
+        ),
+    )
+
+    # -------------------------------------------------------------------------
     # AI — Cloud LLM
     # -------------------------------------------------------------------------
     anthropic_api_key: str = Field(default="", description="Anthropic Claude API key")

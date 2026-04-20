@@ -81,6 +81,11 @@ CREATE TABLE IF NOT EXISTS news_items (
     cluster_size      INT NOT NULL DEFAULT 1,
     similarity_to_rep REAL,
 
+    -- Per-source raw metadata (feedparser entry, X tweet_id + breaking flag,
+    -- API response payload, etc.). Structure varies by source_type — consumers
+    -- should use defensive defaults when reading.
+    raw_data          JSONB,
+
     -- Row timestamps
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -120,6 +125,12 @@ CREATE INDEX IF NOT EXISTS idx_news_cluster_rep
 -- Cluster-size-based rankings ("top stories")
 CREATE INDEX IF NOT EXISTS idx_news_cluster_size_desc
     ON news_items (cluster_size DESC, last_seen_at DESC);
+
+-- Partial index for BREAKING tweets (Phase 3 alerting path)
+CREATE INDEX IF NOT EXISTS idx_news_breaking
+    ON news_items ((raw_data -> 'x' ->> 'breaking'))
+    WHERE source_type = 'x_feed'
+      AND raw_data -> 'x' ->> 'breaking' = 'true';
 
 -- Sentiment filtering
 CREATE INDEX IF NOT EXISTS idx_news_sentiment_label

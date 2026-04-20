@@ -30,7 +30,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from finradar.models import Base
@@ -161,6 +161,19 @@ class NewsItem(Base):
         Float,
         nullable=True,
         comment="Cosine similarity to the cluster representative (1.0 for the rep itself).",
+    )
+
+    # ------------------------------------------------------------------
+    # Per-source metadata (feedparser entry, X tweet meta, API payload, ...)
+    # ------------------------------------------------------------------
+    raw_data: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "Source-specific metadata JSON. Shape varies by source_type. "
+            "Examples: X tweets carry raw_data.x = {tweet_id, username, "
+            "breaking, linked_url, public_metrics}; RSS carries feedparser entry."
+        ),
     )
 
     # ------------------------------------------------------------------

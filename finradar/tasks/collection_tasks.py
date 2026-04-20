@@ -155,6 +155,35 @@ def _now_utc() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+def _serialise_raw_data(raw: Any) -> Any:
+    """Best-effort JSONB-safe coercion of a collector's raw_data payload.
+
+    Collector payloads may include datetime / time.struct_time / FeedParserDict
+    instances that are not natively JSON-serialisable. We walk the structure
+    once and:
+      - leave primitives (str/int/float/bool/None) alone
+      - convert dict-like → dict, list/tuple → list (recursively)
+      - stringify anything else so we never explode the upsert on an exotic type
+    Returns None for an empty input so the column stays NULL.
+    """
+    if raw is None or raw == {} or raw == []:
+        return None
+
+    def _walk(v: Any) -> Any:
+        if v is None or isinstance(v, (str, int, float, bool)):
+            return v
+        if isinstance(v, dict):
+            return {str(k): _walk(val) for k, val in v.items()}
+        if hasattr(v, "items") and callable(v.items):  # FeedParserDict
+            return {str(k): _walk(val) for k, val in v.items()}
+        if isinstance(v, (list, tuple, set, frozenset)):
+            return [_walk(x) for x in v]
+        return str(v)
+
+    walked = _walk(raw)
+    return walked if walked else None
+
+
 def _upsert_articles(session: Session, articles: list[CollectedArticle]) -> tuple[int, int]:
     """Insert new articles; increment hit_count for duplicates.
 
@@ -233,6 +262,8 @@ def _upsert_articles(session: Session, articles: list[CollectedArticle]) -> tupl
                 "ai_summary": None,
                 "embedding": None,
                 "search_vector": None,
+                # Per-source metadata (X tweet meta, RSS feedparser entry, …)
+                "raw_data": _serialise_raw_data(article.raw_data),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -872,6 +903,198 @@ def reconcile_pending_llm(self: Task) -> dict[str, Any]:
     enrich_group.apply_async()
 
     return {"status": "ok", "requeued": len(candidate_ids)}
+
+
+# ---------------------------------------------------------------------------
+# Task: collect_x_posts — X (Twitter) timeline ingest with budget + dedup
+# ---------------------------------------------------------------------------
+
+# Redis key conventions (shared with celery_app's broker; separate DB logical
+# namespace via keys, not db number, to avoid interfering with Celery internals).
+_X_SINCE_KEY = "finradar:x:since_id"        # HSET username -> tweet_id
+_X_SPEND_KEY_FMT = "finradar:x:spend:{ym}"  # STRING float, one key per YYYY-MM
+
+
+def _x_current_month() -> str:
+    return _now_utc().strftime("%Y-%m")
+
+
+def _x_get_redis():
+    """Return a redis.Redis instance using settings.redis_url.
+
+    Imports redis lazily so this module stays importable when the library
+    isn't installed during partial builds.
+    """
+    import redis  # noqa: PLC0415
+
+    return redis.Redis.from_url(get_settings().redis_url, decode_responses=True)
+
+
+def _x_load_since_ids(r, usernames: list[str]) -> dict[str, int]:
+    """Read last-seen tweet ids for the given usernames."""
+    if not usernames:
+        return {}
+    raw = r.hmget(_X_SINCE_KEY, usernames)
+    out: dict[str, int] = {}
+    for name, val in zip(usernames, raw):
+        if val:
+            try:
+                out[name] = int(val)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _x_update_since_ids(r, new_max: dict[str, int]) -> None:
+    """Write latest tweet id per username back to Redis."""
+    if not new_max:
+        return
+    r.hset(_X_SINCE_KEY, mapping={k: str(v) for k, v in new_max.items()})
+
+
+def _x_current_spend(r) -> float:
+    key = _X_SPEND_KEY_FMT.format(ym=_x_current_month())
+    val = r.get(key)
+    try:
+        return float(val) if val else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _x_add_spend(r, dollars: float) -> float:
+    key = _X_SPEND_KEY_FMT.format(ym=_x_current_month())
+    # Use INCRBYFLOAT for atomic float accumulation. Expire 45 days after
+    # month end so the counter cleans itself up.
+    new_val = r.incrbyfloat(key, dollars)
+    r.expire(key, 45 * 24 * 60 * 60)
+    return float(new_val)
+
+
+@celery_app.task(
+    bind=True,
+    name="finradar.tasks.collection_tasks.collect_x_posts",
+    max_retries=1,
+    default_retry_delay=300,
+)
+def collect_x_posts(self: Task) -> dict[str, Any]:
+    """Poll tracked X accounts, ingest new tweets, enforce a monthly spend cap.
+
+    Safety layers (in order):
+      1. ``settings.x_enabled`` AND bearer token present — otherwise no-op.
+      2. Redis-tracked monthly spend ≥ ``x_monthly_budget_usd`` — hard stop.
+      3. ``since_id`` per account — never re-fetch already-seen tweets.
+      4. Max tweets per account per run — caps a single misconfigured run.
+
+    Each tweet ingested costs ``x_cost_per_read_usd`` (default $0.005). The
+    task records running spend so the dashboard/API can display it.
+    """
+    settings = get_settings()
+
+    # Gate 1 — kill switch
+    if not settings.x_enabled or not settings.x_bearer_token:
+        logger.debug(
+            "collect_x_posts: disabled (x_enabled=%s, token_set=%s)",
+            settings.x_enabled, bool(settings.x_bearer_token),
+        )
+        return {"status": "skipped", "reason": "disabled"}
+
+    r = _x_get_redis()
+
+    # Gate 2 — monthly budget
+    current_spend = _x_current_spend(r)
+    if current_spend >= settings.x_monthly_budget_usd:
+        logger.warning(
+            "collect_x_posts: monthly budget exhausted (spent $%.2f ≥ cap $%.2f)",
+            current_spend, settings.x_monthly_budget_usd,
+        )
+        return {
+            "status": "skipped",
+            "reason": "budget_exhausted",
+            "month_spend_usd": round(current_spend, 4),
+        }
+
+    from finradar.collectors.x_collector import XCollector, _parse_accounts  # noqa: PLC0415
+
+    usernames = _parse_accounts(settings.x_tracked_accounts)
+    since_ids = _x_load_since_ids(r, usernames)
+
+    collector = XCollector(since_id_by_account=since_ids)
+
+    try:
+        articles = _run_async(collector.collect())
+    except Exception as exc:
+        logger.error("collect_x_posts: collector failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+    if not articles:
+        return {
+            "status": "ok",
+            "fetched": 0,
+            "inserted": 0,
+            "updated": 0,
+            "month_spend_usd": round(current_spend, 4),
+        }
+
+    # Cost accounting — every returned tweet counts toward spend.
+    added_cost = settings.x_cost_per_read_usd * len(articles)
+    new_spend = _x_add_spend(r, added_cost)
+    logger.info(
+        "collect_x_posts: fetched %d tweets (+$%.4f, spent $%.2f / $%.2f this month)",
+        len(articles), added_cost, new_spend, settings.x_monthly_budget_usd,
+    )
+
+    # Dedup against existing news_items by linked article URL. If the tweet
+    # points at a story already collected via RSS, we drop the standalone
+    # tweet record — the RSS article is the canonical source. Tweets with
+    # no article link (pure commentary/BREAKING) are kept.
+    articles_to_insert: list[CollectedArticle] = []
+    linked_urls = [
+        a.raw_data.get("x", {}).get("linked_url")
+        for a in articles
+    ]
+    nonempty = [u for u in linked_urls if u]
+
+    with SyncSessionLocal() as session:
+        existing_urls: set[str] = set()
+        if nonempty:
+            rows = session.execute(
+                select(NewsItem.url).where(NewsItem.url.in_(nonempty))
+            ).all()
+            existing_urls = {row.url for row in rows}
+
+        for article in articles:
+            linked = article.raw_data.get("x", {}).get("linked_url")
+            if linked and linked in existing_urls:
+                logger.debug(
+                    "collect_x_posts: drop tweet @%s (dup of RSS %s)",
+                    article.raw_data["x"]["username"], linked,
+                )
+                continue
+            articles_to_insert.append(article)
+
+        inserted, updated = _upsert_articles(session, articles_to_insert)
+        session.commit()
+
+    # Update since_id per username to the max tweet_id we just saw.
+    new_max: dict[str, int] = {}
+    for a in articles:
+        meta = a.raw_data.get("x", {})
+        username = (meta.get("username") or "").lower()
+        tweet_id = meta.get("tweet_id")
+        if not username or not tweet_id:
+            continue
+        if tweet_id > new_max.get(username, 0):
+            new_max[username] = tweet_id
+    _x_update_since_ids(r, new_max)
+
+    return {
+        "status": "ok",
+        "fetched": len(articles),
+        "dedup_dropped": len(articles) - len(articles_to_insert),
+        "inserted": inserted,
+        "updated": updated,
+        "month_spend_usd": round(new_spend, 4),
+    }
 
 
 # ---------------------------------------------------------------------------

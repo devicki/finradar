@@ -41,6 +41,7 @@ RUN python -m venv /opt/venv && \
         # HTTP & RSS
         "httpx>=0.25.0" \
         "feedparser>=6.0.0" \
+        "tweepy>=4.14.0" \
         # AI - Local models (CPU wheel; swap to GPU wheel via pip install --extra-index-url)
         "transformers>=4.36.0" \
         "torch>=2.1.0" \

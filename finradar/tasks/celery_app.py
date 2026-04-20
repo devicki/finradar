@@ -113,6 +113,15 @@ celery_app.conf.beat_schedule = {
         "schedule": 1800,  # 30 minutes
         "options": {"queue": "finradar"},
     },
+    # X (Twitter) timeline ingest — pay-as-you-go at $0.005/read.
+    # The task itself checks settings.x_enabled and returns immediately when
+    # disabled, so the schedule stays registered even without API credentials.
+    # Adjust cadence via X_COLLECT_INTERVAL_MIN (default 10 minutes).
+    "collect-x-posts": {
+        "task": "finradar.tasks.collection_tasks.collect_x_posts",
+        "schedule": settings.x_collect_interval_min * 60,
+        "options": {"queue": "finradar"},
+    },
 }
 
 logger.info(
