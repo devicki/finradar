@@ -60,6 +60,45 @@ class NewsListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ScoreBreakdown(BaseModel):
+    """Per-signal scores that combine into the final search ranking score.
+
+    All sub-scores are normalised to roughly [0, 1]:
+
+    * ``fts``       — PostgreSQL ts_rank_cd, divided by the per-query max.
+    * ``cosine``    — pgvector cosine similarity (1 − cosine_distance).
+    * ``recency``   — exponential decay on ``last_seen_at`` (7-day half-life).
+    * ``final``     — weighted sum: ``w_bm25·fts + w_cos·cosine + w_rec·recency``.
+    """
+
+    fts: float = Field(..., description="FTS rank normalised to [0, 1] within the result set")
+    cosine: float = Field(..., description="pgvector cosine similarity (1 − distance)")
+    recency: float = Field(..., description="Exponential-decay recency score")
+    final: float = Field(..., description="Weighted combined score used for ranking")
+
+
+class NewsItemSearchResponse(NewsItemResponse):
+    """NewsItemResponse + optional hybrid-search scoring details."""
+
+    score: float | None = Field(
+        default=None,
+        description="Final weighted hybrid score (equivalent to score_breakdown.final)",
+    )
+    score_breakdown: ScoreBreakdown | None = Field(
+        default=None,
+        description="Per-signal scores (only present when include_scores=true)",
+    )
+
+
+class NewsSearchListResponse(BaseModel):
+    """Paginated hybrid-search response."""
+
+    items: list[NewsItemSearchResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 class SearchRequest(BaseModel):
     """Request body for the hybrid search endpoint."""
 
@@ -98,6 +137,29 @@ class SearchRequest(BaseModel):
         ge=1,
         le=100,
         description="Number of results per page (max 100)",
+    )
+    include_scores: bool = Field(
+        default=False,
+        description="Include per-signal score breakdown in the response items",
+    )
+    # --- Hybrid ranking tunables (override settings defaults per-request) ---
+    weight_bm25: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override rank_weight_bm25 for this request",
+    )
+    weight_cosine: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override rank_weight_cosine for this request",
+    )
+    weight_recency: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Override rank_weight_recency for this request",
     )
 
 

@@ -116,8 +116,13 @@ class Settings(BaseSettings):
         description="HuggingFace model ID for Korean financial sentiment analysis",
     )
     embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
-        description="SentenceTransformers model ID for 384-dim embeddings",
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        description=(
+            "SentenceTransformers model ID for 384-dim embeddings. "
+            "Default is a multilingual model that handles Korean + English "
+            "both monolingually and cross-lingually. Swap to all-MiniLM-L6-v2 "
+            "for English-only speedups if cross-lingual search is unused."
+        ),
     )
     embedding_dim: int = Field(
         default=384,

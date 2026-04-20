@@ -27,11 +27,15 @@ from finradar.db.session import get_db  # noqa: F401
 if TYPE_CHECKING:
     from sqlalchemy import Select
 
+    from finradar.processors.embeddings import EmbeddingGenerator
+
 __all__ = [
     "get_db",
+    "get_embedding_generator",
     "PaginationParams",
     "CommonFilters",
     "DbSession",
+    "EmbeddingDep",
     "_apply_common_filters",
 ]
 
@@ -40,6 +44,38 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+
+
+# ---------------------------------------------------------------------------
+# Shared EmbeddingGenerator (lazy singleton)
+# ---------------------------------------------------------------------------
+#
+# The EmbeddingGenerator loads a ~90MB sentence-transformers model on first
+# use. We keep a module-level singleton so repeated /search calls share the
+# same loaded model. CUDA is auto-detected; the API container has no GPU
+# access so this will fall back to CPU (still <100ms per query).
+
+_embedding_generator: "EmbeddingGenerator | None" = None
+
+
+def get_embedding_generator() -> "EmbeddingGenerator":
+    """FastAPI dependency returning a process-wide EmbeddingGenerator."""
+    global _embedding_generator
+    if _embedding_generator is None:
+        # Import here to avoid loading torch / transformers at module import
+        # time (startup overhead).  First /search call triggers model load.
+        from finradar.config import get_settings
+        from finradar.processors.embeddings import EmbeddingGenerator
+
+        settings = get_settings()
+        _embedding_generator = EmbeddingGenerator(
+            model_name=settings.embedding_model,
+            device=settings.local_model_device,
+        )
+    return _embedding_generator
+
+
+EmbeddingDep = Annotated["EmbeddingGenerator", Depends(get_embedding_generator)]
 
 
 # ---------------------------------------------------------------------------
