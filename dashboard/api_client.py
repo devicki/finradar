@@ -97,6 +97,26 @@ def get_cluster_siblings(news_id: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# URL ingest
+# ---------------------------------------------------------------------------
+
+
+def ingest_url(url: str, language: str | None = None, force_pdf: bool = False) -> dict[str, Any]:
+    """POST an arbitrary URL to /ingest/url for on-demand scraping.
+
+    Returns the server response verbatim (includes status, news_id, message…).
+    """
+    return _post(
+        "/ingest/url",
+        {
+            "url": url,
+            "language": language,
+            "force_pdf": force_pdf,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Feed
 # ---------------------------------------------------------------------------
 

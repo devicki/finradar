@@ -133,6 +133,31 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
+    # YouTube community posts — free (HTML scrape of ytInitialData)
+    # -------------------------------------------------------------------------
+    youtube_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable the YouTube community-posts collector. Uses zero API quota "
+            "(scrapes ytInitialData from the public /@handle/posts HTML page)."
+        ),
+    )
+    youtube_channels: str = Field(
+        default="futuresnow",
+        description=(
+            "Comma-separated YouTube channel handles to track (without @). "
+            "Each handle's /posts page is fetched on the smart-schedule cadence."
+        ),
+    )
+    youtube_default_language: str = Field(
+        default="ko",
+        description=(
+            "ISO language code applied to every post (YouTube doesn't expose per-post "
+            "language in public data). Change if tracking an English channel."
+        ),
+    )
+
+    # -------------------------------------------------------------------------
     # AI — Cloud LLM
     # -------------------------------------------------------------------------
     anthropic_api_key: str = Field(default="", description="Anthropic Claude API key")

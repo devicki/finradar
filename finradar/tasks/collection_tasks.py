@@ -1098,6 +1098,66 @@ def collect_x_posts(self: Task) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Task: collect_youtube_posts — scrape configured YouTube channel posts pages
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    bind=True,
+    name="finradar.tasks.collection_tasks.collect_youtube_posts",
+    max_retries=1,
+    default_retry_delay=300,
+)
+def collect_youtube_posts(self: Task) -> dict[str, Any]:
+    """Scrape YouTube community posts for the configured channel handles.
+
+    Uses zero API quota — parses ``ytInitialData`` embedded in the public
+    ``/@<handle>/posts`` page. Skipped when ``settings.youtube_enabled`` is
+    false. Relies on URL-based dedup in ``_upsert_articles`` so re-scraping
+    the same 10 posts every poll is safe and cheap.
+    """
+    settings = get_settings()
+    if not settings.youtube_enabled:
+        return {"status": "skipped", "reason": "disabled"}
+
+    from finradar.collectors.youtube_collector import YouTubePostsCollector  # noqa: PLC0415
+
+    handles = [h.strip() for h in (settings.youtube_channels or "").split(",") if h.strip()]
+    if not handles:
+        logger.info("collect_youtube_posts: no channels configured")
+        return {"status": "skipped", "reason": "no_channels"}
+
+    collector = YouTubePostsCollector(
+        handles=handles,
+        default_language=settings.youtube_default_language,
+    )
+
+    try:
+        articles = _run_async(collector.collect())
+    except Exception as exc:
+        logger.error("collect_youtube_posts: collector failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+    if not articles:
+        return {"status": "ok", "fetched": 0, "inserted": 0, "updated": 0}
+
+    with SyncSessionLocal() as session:
+        inserted, updated = _upsert_articles(session, articles)
+        session.commit()
+
+    logger.info(
+        "collect_youtube_posts: fetched=%d inserted=%d updated=%d",
+        len(articles), inserted, updated,
+    )
+    return {
+        "status": "ok",
+        "fetched": len(articles),
+        "inserted": inserted,
+        "updated": updated,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Task: cluster_news — periodic story-grouping over recent articles
 # ---------------------------------------------------------------------------
 

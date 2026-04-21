@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 from celery import Celery
+from celery.schedules import crontab
 
 from finradar.config import get_settings
 
@@ -120,6 +121,26 @@ celery_app.conf.beat_schedule = {
     "collect-x-posts": {
         "task": "finradar.tasks.collection_tasks.collect_x_posts",
         "schedule": settings.x_collect_interval_min * 60,
+        "options": {"queue": "finradar"},
+    },
+    # YouTube community posts — smart 3-tier schedule (Beat timezone is UTC).
+    # KST (UTC+9) posting pattern for US-market recap creators:
+    #   05–10 KST (market close window): every 30 min   →  20–01 UTC
+    #   11–23 KST (daytime):              every 2 hours  →  02–14 UTC
+    #   00–04 KST (overnight):            every 4 hours  →  15–19 UTC
+    "youtube-posts-intensive": {
+        "task": "finradar.tasks.collection_tasks.collect_youtube_posts",
+        "schedule": crontab(minute="0,30", hour="20-23,0-1"),
+        "options": {"queue": "finradar"},
+    },
+    "youtube-posts-regular": {
+        "task": "finradar.tasks.collection_tasks.collect_youtube_posts",
+        "schedule": crontab(minute=0, hour="2-14/2"),
+        "options": {"queue": "finradar"},
+    },
+    "youtube-posts-light": {
+        "task": "finradar.tasks.collection_tasks.collect_youtube_posts",
+        "schedule": crontab(minute=0, hour="15-19/4"),
         "options": {"queue": "finradar"},
     },
 }

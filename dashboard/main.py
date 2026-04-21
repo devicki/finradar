@@ -39,7 +39,7 @@ with st.sidebar.expander("필터", expanded=True):
     language = st.selectbox("언어", options=["(전체)", "en", "ko"], index=0)
     source_type = st.selectbox(
         "소스 타입",
-        options=["(전체)", "rss", "api", "x_feed", "url_report"],
+        options=["(전체)", "rss", "api", "x_feed", "youtube_post", "url_report"],
         index=0,
     )
     sentiment_label = st.selectbox(
@@ -67,6 +67,42 @@ dedup = st.sidebar.toggle(
 )
 
 search_clicked = st.sidebar.button("🔎 검색 실행", type="primary", use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# URL 직접 수집 — 기존 수집기가 닿지 않는 임의 URL을 즉석 ingest
+# ---------------------------------------------------------------------------
+
+with st.sidebar.expander("🔗 URL 직접 수집", expanded=False):
+    st.caption(
+        "블로그 / 리서치 PDF / 증권사 리포트 URL을 붙여넣으면 "
+        "trafilatura · pdfplumber로 본문을 추출해 DB에 넣습니다. "
+        "로그인 필요 URL은 에러로 알려줍니다."
+    )
+    ingest_input = st.text_area("URL", height=80, key="ingest_url_input", placeholder="https://...")
+    ingest_force_pdf = st.checkbox("PDF로 강제 처리", value=False, key="ingest_force_pdf")
+    if st.button("📥 Ingest", key="ingest_submit"):
+        if not ingest_input.strip():
+            st.warning("URL을 입력하세요.")
+        else:
+            with st.spinner("URL 수집 중..."):
+                resp = api_client.ingest_url(
+                    ingest_input.strip(),
+                    force_pdf=ingest_force_pdf,
+                )
+            if resp.get("status") == "ok":
+                st.success(
+                    f"✅ id={resp['news_id']} / {resp.get('extracted_len', 0)}자 추출됨  \n"
+                    f"**{resp.get('title', '(no title)')[:80]}**"
+                )
+                nid = resp.get("news_id")
+                if nid:
+                    st.markdown(f"[상세 페이지 →](/Article?news_id={nid})")
+            elif resp.get("status") == "login_required":
+                st.error(f"🔒 로그인 필요: {resp.get('message')}")
+            elif resp.get("status") == "unsupported":
+                st.warning(f"⚠️ 미지원 형식: {resp.get('message')}")
+            else:
+                st.error(f"❌ {resp.get('status')}: {resp.get('message') or resp.get('error')}")
 
 
 # ---------------------------------------------------------------------------
@@ -222,12 +258,24 @@ for i, item in enumerate(items, start=1 + (int(page) - 1) * int(page_size)):
                 with st.expander("요약 펼치기", expanded=False):
                     st.write(ai_summary[:1000])
 
+            # 소스 타입 배지 — 한눈에 기사 출처 형태 인식
+            source_badges = {
+                "rss": "📰 RSS",
+                "api": "📡 API",
+                "x_feed": "🐦 X",
+                "youtube_post": "▶️ YT",
+                "url_report": "🔗 URL",
+            }
+            source_badge = source_badges.get(item.get("source_type"), item.get("source_type") or "")
+
             # 메타 정보
             meta_parts = [
                 _sentiment_badge(item.get("sentiment_label"), item.get("sentiment")),
                 f"🌏 {item.get('language') or '?'}",
                 f"📅 {_fmt_ts(item.get('last_seen_at'))}",
             ]
+            if source_badge:
+                meta_parts.append(source_badge)
             if item.get("tickers"):
                 meta_parts.append("💹 " + ", ".join(item["tickers"][:5]))
             if item.get("sectors"):

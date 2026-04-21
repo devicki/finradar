@@ -26,7 +26,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from finradar.api.routes import feed, news, search
+from finradar.api.routes import feed, ingest, news, search
 from finradar.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ app.add_middleware(
 app.include_router(news.router, prefix="/api/v1/news", tags=["news"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["search"])
 app.include_router(feed.router, prefix="/api/v1/feed", tags=["feed"])
+app.include_router(ingest.router, prefix="/api/v1/ingest", tags=["ingest"])
 
 # ---------------------------------------------------------------------------
 # Health check
