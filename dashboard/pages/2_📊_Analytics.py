@@ -199,3 +199,42 @@ else:
 
 st.divider()
 st.caption(f"생성 시각: {data.get('generated_at', '-')}  ·  윈도우: {data.get('window_hours')}시간")
+
+# ---------------------------------------------------------------------------
+# 내 선호도 스냅샷 — 개인화 엔진 투명성
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.subheader("🧭 내 개인화 선호도")
+st.caption(
+    "피드백 기반 sector/ticker 선호도. "
+    "양수 = 좋아요 많이 한 주제, 음수 = 싫어요/숨김 많이 한 주제. "
+    "피드백이 5건 미만이면 의미 있는 신호가 아직 쌓이지 않습니다."
+)
+
+aff = api_client.get_affinity()
+if "error" in aff:
+    st.error(f"affinity 조회 실패: {aff['error']}")
+else:
+    st.caption(f"누적 피드백: **{aff.get('feedback_rows', 0)}건**")
+
+    col_up, col_dn = st.columns(2)
+    with col_up:
+        st.markdown("**⬆ 선호 (positive)**")
+        tops = (aff.get("top_sectors") or []) + (aff.get("top_tickers") or [])
+        tops_pos = [x for x in tops if x.get("score", 0) > 0]
+        if tops_pos:
+            df_up = pd.DataFrame(tops_pos[:10])
+            st.dataframe(df_up, use_container_width=True, hide_index=True)
+        else:
+            st.caption("아직 선호 신호 없음 — 👍 또는 🔖 버튼을 눌러보세요.")
+
+    with col_dn:
+        st.markdown("**⬇ 비선호 (negative)**")
+        bottoms = (aff.get("bottom_sectors") or []) + (aff.get("bottom_tickers") or [])
+        bottoms_neg = [x for x in bottoms if x.get("score", 0) < 0]
+        if bottoms_neg:
+            df_dn = pd.DataFrame(bottoms_neg[:10])
+            st.dataframe(df_dn, use_container_width=True, hide_index=True)
+        else:
+            st.caption("아직 비선호 신호 없음 — 👎 또는 🙈 버튼을 눌러보세요.")

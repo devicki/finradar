@@ -197,6 +197,15 @@ class SearchRequest(BaseModel):
             "via the 🙈 button."
         ),
     )
+    personalize: bool = Field(
+        default=False,
+        description=(
+            "When true, multiply each result's final_score by "
+            "(1 + personal_boost) computed from the current user's "
+            "feedback history. Requires the user has at least a few "
+            "like/dislike rows for a visible effect."
+        ),
+    )
     # --- Hybrid ranking tunables (override settings defaults per-request) ---
     weight_bm25: float | None = Field(
         default=None,

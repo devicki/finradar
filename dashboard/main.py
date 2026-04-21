@@ -66,6 +66,12 @@ dedup = st.sidebar.toggle(
     help="같은 클러스터의 여러 기사 중 대표 1건만 표시",
 )
 
+personalize = st.sidebar.toggle(
+    "🧭 개인화 boost",
+    value=False,
+    help="피드백 기반으로 final_score에 (1 + personal_boost)를 곱해 재정렬",
+)
+
 search_clicked = st.sidebar.button("🔎 검색 실행", type="primary", use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -161,6 +167,7 @@ with st.spinner("하이브리드 검색 중..."):
         sectors=_parse_list(sector_input),
         include_scores=True,
         dedup=dedup,
+        personalize=personalize,
         weight_bm25=w_bm25,
         weight_cosine=w_cos,
         weight_recency=w_rec,

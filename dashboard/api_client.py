@@ -60,6 +60,7 @@ def search(
     sectors: list[str] | None = None,
     include_scores: bool = True,
     dedup: bool = False,
+    personalize: bool = False,
     weight_bm25: float | None = None,
     weight_cosine: float | None = None,
     weight_recency: float | None = None,
@@ -82,6 +83,7 @@ def search(
             "sectors": sectors,
             "include_scores": include_scores,
             "dedup": dedup,
+            "personalize": personalize,
             "weight_bm25": weight_bm25,
             "weight_cosine": weight_cosine,
             "weight_recency": weight_recency,
@@ -156,6 +158,11 @@ def list_bookmarks(page: int = 1, page_size: int = 20) -> dict[str, Any]:
 
 def list_dismissed(page: int = 1, page_size: int = 20) -> dict[str, Any]:
     return _get("/feedback/dismissed", {"page": page, "page_size": page_size})
+
+
+def get_affinity() -> dict[str, Any]:
+    """Top / bottom sectors + tickers the engine learned from my feedback."""
+    return _get("/feedback/affinity")
 
 
 # ---------------------------------------------------------------------------

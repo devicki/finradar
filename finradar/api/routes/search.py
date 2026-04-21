@@ -291,12 +291,39 @@ async def search_news(
 
     total: int = int(rows[0]["total_count"]) if rows else 0
 
-    # ---- 4. Marshall rows into Pydantic ------------------------------------
+    # ---- 5. Personalisation (optional) ------------------------------------
+    # Multiplies each row's final_score by (1 + personal_boost). Because the
+    # SQL has already paged (OFFSET/LIMIT), personalisation here only
+    # re-ranks *inside* the page — it can't pull an article up from page 3.
+    # For Phase 3 that's acceptable; Phase 4 may move the boost into SQL.
+    if request.personalize and rows:
+        from finradar.personalization import get_affinity, personal_boost  # noqa: PLC0415
+        from finradar.tasks.collection_tasks import SyncSessionLocal  # noqa: PLC0415
+
+        with SyncSessionLocal() as sync_session:
+            affinity = get_affinity(sync_session, user_id=_current_user_id())
+
+        rows = list(rows)
+        for i, row in enumerate(rows):
+            boost = personal_boost(
+                affinity,
+                sectors=row.get("sectors") or [],
+                tickers=row.get("tickers") or [],
+            )
+            # Row mappings are read-only — stash the new score on a shallow
+            # dict copy we'll marshal below.
+            rows[i] = {**dict(row), "final_score": float(row["final_score"]) * (1.0 + boost)}
+
+        # Re-sort by the boosted score.
+        rows.sort(key=lambda r: r["final_score"], reverse=True)
+
+    # ---- 6. Marshall rows into Pydantic ------------------------------------
     items: list[NewsItemSearchResponse] = []
     for row in rows:
         # NewsItemSearchResponse inherits NewsItemResponse fields; the row
         # dict from RowMapping includes every NewsItem column plus our
-        # computed score columns.
+        # computed score columns. ``row`` may be a RowMapping (raw SQL) or a
+        # plain dict (personalize re-rank path).
         payload: dict[str, Any] = {
             key: row[key] for key in NewsItemSearchResponse.model_fields.keys()
             if key in row and key not in ("score", "score_breakdown")

@@ -32,6 +32,7 @@ sort_label_to_value = {
     "🕒 최신순 (recency)": "latest",
     "🧩 큰 스토리 우선": "cluster_size",
     "💢 감성 강한 순": "sentiment_strength",
+    "🧭 개인화 (recency × personal_boost)": "personalized",
 }
 sort_label = st.sidebar.radio(
     "정렬",

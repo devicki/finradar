@@ -91,7 +91,12 @@ async def get_feed(
     ),
     sort: str = Query(
         default="latest",
-        description="latest | cluster_size | sentiment_strength",
+        description=(
+            "latest | cluster_size | sentiment_strength | personalized. "
+            "`personalized` re-ranks the recent candidate pool by recency × "
+            "(1 + personal_boost) using the current user's like/dislike "
+            "history."
+        ),
     ),
     hide_dismissed: bool = Query(
         default=True,
@@ -131,6 +136,11 @@ async def get_feed(
             .exists()
         )
 
+    if sort == "personalized":
+        return await _personalized_feed(
+            db, filters, _apply_dedup, _apply_dismiss, pagination,
+        )
+
     order_by = _SORT_OPTIONS.get(sort) or _SORT_OPTIONS["latest"]
 
     # Count
@@ -158,6 +168,88 @@ async def get_feed(
         page=pagination.page,
         page_size=pagination.page_size,
     )
+
+
+# ---------------------------------------------------------------------------
+# Personalised feed — recency × (1 + personal_boost), Python-side re-rank
+# ---------------------------------------------------------------------------
+
+
+async def _personalized_feed(
+    db,
+    filters,
+    apply_dedup,
+    apply_dismiss,
+    pagination: PaginationParams,
+) -> NewsListResponse:
+    """Candidate pool from recent articles, Python-rerank by personal boost.
+
+    We keep the candidate pool bounded (``_PERSONALIZED_POOL_SIZE``) so
+    re-ranking stays cheap even with thousands of matching rows. Re-rank
+    is done in Python because the affinity dict lives in Redis, not the
+    DB — copying it into every query would be more expensive than the
+    current approach.
+    """
+    from finradar.api.routes.feedback import _current_user_id  # noqa: PLC0415
+    from finradar.personalization import get_affinity, personal_boost  # noqa: PLC0415
+    from finradar.tasks.collection_tasks import SyncSessionLocal  # noqa: PLC0415
+
+    pool_stmt = (
+        select(NewsItem)
+        .order_by(_EFFECTIVE_PUBLISHED.desc())
+        .limit(_PERSONALIZED_POOL_SIZE)
+    )
+    pool_stmt = _apply_common_filters(pool_stmt, filters)
+    pool_stmt = apply_dedup(pool_stmt)
+    pool_stmt = apply_dismiss(pool_stmt)
+    candidates = (await db.execute(pool_stmt)).scalars().all()
+
+    # Affinity calculation uses a sync session (matches the rest of the
+    # personalization module, which plugs into Celery tasks too).
+    user_id = _current_user_id()
+    with SyncSessionLocal() as sync_session:
+        affinity = get_affinity(sync_session, user_id=user_id)
+
+    # Recency component: exp(-days_since_published / 7). Published_at may be
+    # NULL for some legacy rows; fall back to first_seen_at.
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    now_utc = datetime.now(tz=timezone.utc)
+
+    def _recency(item: NewsItem) -> float:
+        ts = item.published_at or item.first_seen_at
+        if ts is None:
+            return 0.0
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        days = max(0.0, (now_utc - ts).total_seconds() / 86400.0)
+        return pow(2.718281828, -days / 7.0)
+
+    scored = []
+    for item in candidates:
+        recency = _recency(item)
+        boost = personal_boost(
+            affinity,
+            sectors=item.sectors or [],
+            tickers=item.tickers or [],
+        )
+        score = (1.0 + boost) * recency
+        scored.append((score, item))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    total = len(scored)
+    start = pagination.offset
+    page = scored[start : start + pagination.page_size]
+    return NewsListResponse(
+        items=[NewsItemResponse.model_validate(item) for _, item in page],
+        total=total,
+        page=pagination.page,
+        page_size=pagination.page_size,
+    )
+
+
+_PERSONALIZED_POOL_SIZE = 300  # candidate cap before Python rerank
 
 
 # ---------------------------------------------------------------------------

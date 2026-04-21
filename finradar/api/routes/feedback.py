@@ -320,6 +320,63 @@ async def list_dismissed(
 
 
 # ---------------------------------------------------------------------------
+# GET /feedback/affinity — what the personalisation engine "knows" about me
+# ---------------------------------------------------------------------------
+
+
+class AffinityTag(BaseModel):
+    tag: str
+    score: float
+
+
+class AffinityResponse(BaseModel):
+    user_id: str
+    feedback_rows: int
+    top_sectors: list[AffinityTag]
+    bottom_sectors: list[AffinityTag]
+    top_tickers: list[AffinityTag]
+    bottom_tickers: list[AffinityTag]
+
+
+@router.get(
+    "/affinity",
+    response_model=AffinityResponse,
+    summary="My personalisation affinity snapshot",
+    description=(
+        "Returns the sectors / tickers the ranking engine currently thinks "
+        "the user prefers (top) or avoids (bottom). `feedback_rows` is the "
+        "total number of feedback rows that contributed; personalisation "
+        "has visible effect roughly from 5–10 rows onward."
+    ),
+)
+async def get_affinity_snapshot(db: DbSession, user_id: CurrentUser) -> AffinityResponse:
+    # Affinity calculation lives in the sync-session module for reuse from
+    # Celery; here we just grab a separate sync session briefly.
+    from finradar.personalization import get_affinity  # noqa: PLC0415
+    from finradar.tasks.collection_tasks import SyncSessionLocal  # noqa: PLC0415
+
+    with SyncSessionLocal() as sync_session:
+        report = get_affinity(sync_session, user_id=user_id)
+
+    def _to_tags(pairs: list[tuple[str, float]]) -> list[AffinityTag]:
+        return [AffinityTag(tag=t, score=round(s, 4)) for t, s in pairs]
+
+    # Bottom ranks = lowest (most negative) scores; reuse top_sectors()
+    # sort and reverse-index the tail to get them.
+    all_sectors = sorted(report.sectors.items(), key=lambda kv: kv[1], reverse=True)
+    all_tickers = sorted(report.tickers.items(), key=lambda kv: kv[1], reverse=True)
+
+    return AffinityResponse(
+        user_id=report.user_id,
+        feedback_rows=report.feedback_rows,
+        top_sectors=_to_tags(all_sectors[:5]),
+        bottom_sectors=_to_tags(list(reversed(all_sectors[-5:]))),
+        top_tickers=_to_tags(all_tickers[:5]),
+        bottom_tickers=_to_tags(list(reversed(all_tickers[-5:]))),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Internal helper: paginate articles the user has taken a given action on
 # ---------------------------------------------------------------------------
 
