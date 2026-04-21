@@ -1102,6 +1102,50 @@ def collect_x_posts(self: Task) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Task: send_breaking_alerts — fan out BREAKING / strong-signal articles to
+# Discord (Phase 3 Day 3). Reads settings to stay a no-op when disabled.
+# ---------------------------------------------------------------------------
+
+
+@celery_app.task(
+    bind=True,
+    name="finradar.tasks.collection_tasks.send_breaking_alerts",
+    max_retries=1,
+    default_retry_delay=120,
+)
+def send_breaking_alerts(self: Task) -> dict[str, Any]:
+    """Push eligible recent articles to Discord webhooks.
+
+    All throttling / dedup lives inside ``dispatch_pending_alerts``. This
+    task just wires a sync SQLAlchemy session and returns the summary
+    counters for monitoring.
+    """
+    settings = get_settings()
+    if not settings.alerts_enabled:
+        return {"status": "skipped", "reason": "disabled"}
+
+    from finradar.alerts import dispatch_pending_alerts  # noqa: PLC0415
+
+    try:
+        with SyncSessionLocal() as session:
+            result = dispatch_pending_alerts(session)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("send_breaking_alerts: failed — %s", exc, exc_info=True)
+        raise self.retry(exc=exc)
+
+    return {
+        "status": "ok",
+        "scanned": result.scanned,
+        "candidates": result.candidates,
+        "sent": result.sent,
+        "skipped_already_sent": result.skipped_already_sent,
+        "skipped_cluster_dedup": result.skipped_cluster_dedup,
+        "skipped_hourly_cap": result.skipped_hourly_cap,
+        "send_failures": result.send_failures,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Task: collect_youtube_posts — scrape configured YouTube channel posts pages
 # ---------------------------------------------------------------------------
 

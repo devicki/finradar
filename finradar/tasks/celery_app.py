@@ -143,6 +143,14 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=0, hour="15-19/4"),
         "options": {"queue": "finradar"},
     },
+    # Breaking-news alerts — fan out significant articles to Discord.
+    # Per-article, per-cluster, and hourly-cap throttling all live inside
+    # the dispatcher; task itself checks settings.alerts_enabled first.
+    "send-breaking-alerts": {
+        "task": "finradar.tasks.collection_tasks.send_breaking_alerts",
+        "schedule": settings.alerts_interval_min * 60,
+        "options": {"queue": "finradar"},
+    },
 }
 
 logger.info(

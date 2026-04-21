@@ -133,6 +133,88 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
+    # Breaking-news alerts (Phase 3) — push BREAKING / strong-signal articles
+    # to Discord (and eventually Telegram) so the user hears about them
+    # before checking the dashboard.
+    # -------------------------------------------------------------------------
+    alerts_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master kill-switch for the alert Celery task. Defaults to false "
+            "so fresh clones don't accidentally spam a webhook on first boot."
+        ),
+    )
+    alerts_interval_min: int = Field(
+        default=5,
+        ge=1,
+        description="Minutes between send_breaking_alerts runs.",
+    )
+    alerts_hourly_cap: int = Field(
+        default=50,
+        ge=1,
+        description=(
+            "Max alerts dispatched per rolling hour (across all destinations). "
+            "Protects against trigger misconfig / sudden news rushes."
+        ),
+    )
+    alerts_lookback_min: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "How far back the dispatcher scans for eligible articles on each "
+            "run. Larger than alerts_interval_min so a late process_pending_news "
+            "cycle doesn't lose a breaking item."
+        ),
+    )
+    alerts_min_abs_sentiment: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="|sentiment| threshold that — combined with cluster size — can trigger an alert.",
+    )
+    alerts_min_cluster_size: int = Field(
+        default=3,
+        ge=1,
+        description="Minimum cluster size for the strong-sentiment trigger path.",
+    )
+    alerts_max_cluster_size: int = Field(
+        default=50,
+        ge=1,
+        description=(
+            "Maximum cluster size for the strong-sentiment trigger. Korean-news "
+            "template similarity produces clusters of 100–300 unrelated articles "
+            "(Phase 2 known issue) — alerting on those is noise. Ticker-watch "
+            "trigger bypasses this cap because an explicit watchlist hit outweighs "
+            "cluster-quality concerns."
+        ),
+    )
+    alerts_require_sectors: bool = Field(
+        default=True,
+        description=(
+            "When true, strong-sentiment trigger requires the article to have "
+            "≥1 LLM-extracted sector. Filters out celeb / social news which the "
+            "LLM rarely tags with finance sectors."
+        ),
+    )
+    alerts_tickers_watch: str = Field(
+        default="",
+        description=(
+            "Comma-separated ticker watchlist (e.g. 'NVDA,AAPL,005930.KS'). "
+            "Articles mentioning any of these tickers become alert candidates "
+            "even without a BREAKING flag or strong sentiment."
+        ),
+    )
+
+    discord_enabled: bool = Field(
+        default=False,
+        description="Send alerts to Discord via webhook when true.",
+    )
+    discord_webhook_url: str = Field(
+        default="",
+        description="Discord webhook URL. Leave empty to disable regardless of discord_enabled.",
+    )
+
+    # -------------------------------------------------------------------------
     # YouTube community posts — free (HTML scrape of ytInitialData)
     # -------------------------------------------------------------------------
     youtube_enabled: bool = Field(
