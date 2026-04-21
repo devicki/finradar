@@ -69,7 +69,12 @@ CREATE TABLE IF NOT EXISTS news_items (
     tickers         VARCHAR(16)[],          -- e.g. '{AAPL,TSLA}'
     sectors         VARCHAR(64)[],          -- e.g. '{반도체,AI}'
 
-    -- Vector search (384-dim all-MiniLM-L6-v2)
+    -- Source-declared publication timestamp (RSS pubDate, tweet created_at,
+    -- trafilatura meta.date, …). Nullable because not every collector path
+    -- can recover it. Downstream filters/sorts COALESCE it with first_seen_at.
+    published_at    TIMESTAMPTZ,
+
+    -- Vector search (384-dim paraphrase-multilingual-MiniLM-L12-v2)
     embedding       vector(384),
 
     -- Full-text search (maintained by trigger below)
@@ -117,6 +122,11 @@ CREATE INDEX IF NOT EXISTS idx_news_tickers
 -- Recency-based feed queries (most recent first)
 CREATE INDEX IF NOT EXISTS idx_news_last_seen
     ON news_items (last_seen_at DESC);
+
+-- User-facing "latest published" queries — distinct from last_seen_at which
+-- shifts on every duplicate hit.
+CREATE INDEX IF NOT EXISTS idx_news_published_at
+    ON news_items (published_at DESC);
 
 -- Cluster sibling lookup
 CREATE INDEX IF NOT EXISTS idx_news_cluster_rep

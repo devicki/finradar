@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finradar.api.deps import CommonFilters, DbSession, PaginationParams, _apply_common_filters
@@ -41,16 +41,40 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
+# Effective recency expression — prefer the source's published_at, fall back
+# to our first_seen_at so NULL-published_at rows don't sort to the bottom.
+_EFFECTIVE_PUBLISHED = func.coalesce(NewsItem.published_at, NewsItem.first_seen_at)
+
+
+_SORT_OPTIONS = {
+    # Chronological by publication time — the default, matches the
+    # "Latest News" mental model.
+    "latest": (_EFFECTIVE_PUBLISHED.desc(),),
+    # Big-story first — cluster size then publication recency.
+    "cluster_size": (
+        NewsItem.cluster_size.desc(),
+        _EFFECTIVE_PUBLISHED.desc(),
+    ),
+    # Strong-signal sentiment first — surfaces articles the pipeline scored
+    # strongly positive OR strongly negative.  Ties break on recency.
+    "sentiment_strength": (
+        desc(func.abs(func.coalesce(NewsItem.sentiment, 0.0))),
+        _EFFECTIVE_PUBLISHED.desc(),
+    ),
+}
+
+
 @router.get(
     "/",
     response_model=NewsListResponse,
     summary="Personalised news feed",
     description=(
-        "Return the latest news items sorted by `last_seen_at` descending. "
-        "Phase 1: ordering is purely chronological.  "
-        "Phase 3 will incorporate personal_boost from user feedback. "
-        "Dedup defaults to TRUE for the feed: only cluster representatives "
-        "(and singletons) are returned so the same story isn't repeated."
+        "Paginated news feed with optional sort / filter / dedup. Sort options: "
+        "`latest` (default, most recent first), `cluster_size` (biggest stories "
+        "first, useful for 'what's trending'), `sentiment_strength` (strongly "
+        "positive/negative first, ties broken by recency). "
+        "Dedup defaults to TRUE: only cluster representatives and singletons "
+        "are returned so the same story isn't repeated."
     ),
 )
 async def get_feed(
@@ -63,6 +87,10 @@ async def get_feed(
             "When true (default), suppress duplicate articles within a cluster — "
             "only the cluster representative (or singletons) are returned."
         ),
+    ),
+    sort: str = Query(
+        default="latest",
+        description="latest | cluster_size | sentiment_strength",
     ),
 ) -> NewsListResponse:
     # Dedup predicate: keep singletons (cluster_rep_id IS NULL) and cluster reps
@@ -77,16 +105,18 @@ async def get_feed(
             )
         )
 
+    order_by = _SORT_OPTIONS.get(sort) or _SORT_OPTIONS["latest"]
+
     # Count
     count_stmt = select(func.count()).select_from(NewsItem)
     count_stmt = _apply_common_filters(count_stmt, filters)
     count_stmt = _apply_dedup(count_stmt)
     total: int = (await db.execute(count_stmt)).scalar_one()
 
-    # Data — most recent first
+    # Data
     data_stmt = (
         select(NewsItem)
-        .order_by(NewsItem.last_seen_at.desc())
+        .order_by(*order_by)
         .offset(pagination.offset)
         .limit(pagination.page_size)
     )
@@ -146,7 +176,9 @@ async def get_feed_summary(
             NewsItem.sectors,
             NewsItem.ai_summary,
         )
-        .where(NewsItem.first_seen_at >= window_start)
+        # Window on publication time (user-facing "last 24h" = 최근 발행).
+        # COALESCE so NULL-published rows still have a chance via first_seen_at.
+        .where(_EFFECTIVE_PUBLISHED >= window_start)
     )
     rows = (await db.execute(stmt)).all()
 

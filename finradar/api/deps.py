@@ -174,16 +174,22 @@ def _apply_common_filters(stmt: "Select", filters: CommonFilters) -> "Select":
         stmt = stmt.where(NewsItem.tickers.contains([filters.ticker]))
     if filters.sector:
         stmt = stmt.where(NewsItem.sectors.contains([filters.sector]))
+    # Date filters apply to publication time (user expectation: "기사 발행일").
+    # COALESCE so NULL-published rows fall back to first_seen_at and aren't
+    # silently excluded from the window.
+    from sqlalchemy import func  # noqa: PLC0415 — already imported in callers
+
+    effective_published = func.coalesce(NewsItem.published_at, NewsItem.first_seen_at)
     if filters.date_from:
         try:
             dt_from = datetime.fromisoformat(filters.date_from)
-            stmt = stmt.where(NewsItem.first_seen_at >= dt_from)
+            stmt = stmt.where(effective_published >= dt_from)
         except ValueError:
             pass  # silently skip malformed date strings
     if filters.date_to:
         try:
             dt_to = datetime.fromisoformat(filters.date_to)
-            stmt = stmt.where(NewsItem.first_seen_at <= dt_to)
+            stmt = stmt.where(effective_published <= dt_to)
         except ValueError:
             pass
     return stmt

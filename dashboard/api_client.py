@@ -128,10 +128,19 @@ def feed(
     sentiment_label: str | None = None,
     ticker: str | None = None,
     sector: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    dedup: bool = True,
+    sort: str = "latest",
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
-    """시간순 뉴스 피드."""
+    """뉴스 피드 (Latest News 페이지).
+
+    Args:
+        sort: latest | cluster_size | sentiment_strength
+        dedup: True → 클러스터 대표만 (기본), False → 모두
+    """
     return _get(
         "/feed/",
         {
@@ -140,6 +149,10 @@ def feed(
             "sentiment_label": sentiment_label,
             "ticker": ticker,
             "sector": sector,
+            "date_from": date_from,
+            "date_to": date_to,
+            "dedup": "true" if dedup else "false",
+            "sort": sort,
             "page": page,
             "page_size": page_size,
         },

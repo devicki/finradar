@@ -249,8 +249,12 @@ def _upsert_articles(session: Session, articles: list[CollectedArticle]) -> tupl
                 "source_url": article.source_url,
                 "source_type": article.source_type,
                 "language": article.language,
-                "first_seen_at": article.published_at or now,
-                "last_seen_at": article.published_at or now,
+                # Separate content semantics from row lifecycle:
+                #   published_at = when the source says it was published
+                #   first/last_seen_at = when OUR pipeline observed the row
+                "published_at": article.published_at,
+                "first_seen_at": now,
+                "last_seen_at": now,
                 "hit_count": 1,
                 "tickers": article.tickers if article.tickers else None,
                 "sectors": article.sectors if article.sectors else None,

@@ -65,9 +65,23 @@ class NewsItem(Base):
     # ------------------------------------------------------------------
     # Timestamps & deduplication
     # ------------------------------------------------------------------
+    # Source-declared publication time (RSS pubDate, tweet created_at,
+    # trafilatura meta.date, …). Nullable — not every collector path can
+    # recover it. User-facing feeds filter/sort on this column.
+    published_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the article was published at the source (may be NULL).",
+    )
+    # Time we first INSERTed this row. Distinct from published_at — this is
+    # about OUR system's lifecycle, not the content's. Aligned with
+    # created_at going forward.
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    # Time the same URL was most recently re-observed by a collector
+    # (hit_count tick). Stays equal to first_seen_at when the article is
+    # never re-collected.
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

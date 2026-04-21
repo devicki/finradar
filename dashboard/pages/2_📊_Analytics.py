@@ -1,6 +1,7 @@
-"""Feed 요약 페이지.
+"""Analytics — 지정한 시간 범위 기사들의 집계 뷰.
 
-지정한 시간 범위 내 기사들의 감성 분포, 상위 티커/섹터 집계.
+감성 분포, Top Tickers, Top Sectors, 그리고 LLM/티커/섹터 커버리지 메트릭.
+개별 기사를 훑어보려면 Latest News 페이지를 사용하세요.
 """
 from __future__ import annotations
 
@@ -16,10 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import api_client  # noqa: E402
 
 
-st.set_page_config(page_title="Feed Summary", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Analytics", page_icon="📊", layout="wide")
 
-st.title("📊 Feed Summary")
-st.caption("최근 N시간 동안 수집된 기사들의 감성 분포 + 상위 티커/섹터")
+st.title("📊 Analytics")
+st.caption(
+    "최근 N시간 동안 수집된 기사들의 감성 분포 · 상위 티커/섹터 · 처리율 커버리지. "
+    "개별 기사를 읽으려면 **Latest News** 페이지로 이동하세요."
+)
 
 # ---------------------------------------------------------------------------
 # 사이드바: 기간 선택

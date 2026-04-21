@@ -38,6 +38,10 @@ class NewsItemResponse(BaseModel):
     ai_summary: str | None
     tickers: list[str] | None
     sectors: list[str] | None
+    published_at: datetime | None = Field(
+        default=None,
+        description="Source-declared publication time (may be NULL for some ingest paths).",
+    )
     first_seen_at: datetime
     last_seen_at: datetime
     hit_count: int

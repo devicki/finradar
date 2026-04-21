@@ -92,7 +92,10 @@ mcol1, mcol2, mcol3, mcol4 = st.columns(4)
 mcol1.metric("감성", _sent_badge(article.get("sentiment_label"), article.get("sentiment")))
 mcol2.metric("언어", article.get("language") or "-")
 mcol3.metric("조회수", f"{article.get('hit_count', 0):,}")
-mcol4.metric("Seen At", _fmt_ts(article.get("last_seen_at")))
+mcol4.metric(
+    "Published",
+    _fmt_ts(article.get("published_at") or article.get("first_seen_at")),
+)
 
 st.divider()
 
@@ -174,7 +177,7 @@ if cluster_rep_id is not None and cluster_size and cluster_size >= 2:
                     meta = [
                         _sent_badge(s.get("sentiment_label"), s.get("sentiment")),
                         f"🌏 {s.get('language') or '?'}",
-                        f"📅 {_fmt_ts(s.get('last_seen_at'))}",
+                        f"📅 {_fmt_ts(s.get('published_at') or s.get('last_seen_at'))}",
                     ]
                     if s.get("tickers"):
                         meta.append("💹 " + ", ".join(s["tickers"][:3]))
@@ -229,7 +232,7 @@ else:
                 meta_parts = [
                     _sent_badge(x.get("sentiment_label"), x.get("sentiment")),
                     f"🌏 {x.get('language') or '?'}",
-                    f"📅 {_fmt_ts(x.get('last_seen_at'))}",
+                    f"📅 {_fmt_ts(x.get('published_at') or x.get('last_seen_at'))}",
                 ]
                 if tickers_x:
                     meta_parts.append("💹 " + ", ".join(tickers_x[:3]))
