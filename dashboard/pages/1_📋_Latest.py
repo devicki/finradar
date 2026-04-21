@@ -120,6 +120,8 @@ if not items:
     st.info("조건에 맞는 기사가 없습니다. 필터를 조정해보세요.")
     st.stop()
 
+fb_states = components.load_feedback_states(items)
+
 start_index = (int(page) - 1) * int(page_size) + 1
 for offset, item in enumerate(items):
     components.render_news_card(
@@ -127,4 +129,6 @@ for offset, item in enumerate(items):
         index=start_index + offset,
         show_score=False,
         show_cluster_expander=True,
+        show_feedback=True,
+        feedback_state=fb_states.get(item["id"], []),
     )

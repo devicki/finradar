@@ -117,6 +117,48 @@ def ingest_url(url: str, language: str | None = None, force_pdf: bool = False) -
 
 
 # ---------------------------------------------------------------------------
+# Feedback (like / dislike / bookmark / dismiss)
+# ---------------------------------------------------------------------------
+
+
+def submit_feedback(news_id: int, action: str) -> dict[str, Any]:
+    """POST /feedback — upsert a feedback row for the current user."""
+    return _post("/feedback/", {"news_id": news_id, "action": action})
+
+
+def delete_feedback(news_id: int, action: str) -> dict[str, Any]:
+    """DELETE /feedback/{news_id}/{action} — toggle off."""
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            r = client.delete(f"{_API_PREFIX}/feedback/{news_id}/{action}")
+            if r.status_code == 204:
+                return {"status": "ok"}
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPError as e:
+        return {"error": str(e)}
+
+
+def feedback_status_batch(news_ids: list[int]) -> dict[int, list[str]]:
+    """POST /feedback/status/batch → {news_id: [actions]} (best-effort)."""
+    if not news_ids:
+        return {}
+    resp = _post("/feedback/status/batch", {"news_ids": news_ids})
+    if "error" in resp:
+        return {}
+    # JSON object keys come back as strings; coerce back to int for convenience.
+    return {int(k): v for k, v in (resp.get("states") or {}).items()}
+
+
+def list_bookmarks(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    return _get("/feedback/bookmarks", {"page": page, "page_size": page_size})
+
+
+def list_dismissed(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    return _get("/feedback/dismissed", {"page": page, "page_size": page_size})
+
+
+# ---------------------------------------------------------------------------
 # Feed
 # ---------------------------------------------------------------------------
 

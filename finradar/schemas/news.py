@@ -190,6 +190,13 @@ class SearchRequest(BaseModel):
             "endpoint defaults to true."
         ),
     )
+    hide_dismissed: bool = Field(
+        default=True,
+        description=(
+            "When true (default), hide articles the current user dismissed "
+            "via the 🙈 button."
+        ),
+    )
     # --- Hybrid ranking tunables (override settings defaults per-request) ---
     weight_bm25: float | None = Field(
         default=None,

@@ -219,6 +219,7 @@ CREATE TRIGGER trig_news_items_updated_at
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS user_feedback (
     id          SERIAL PRIMARY KEY,
+    user_id     VARCHAR(64) NOT NULL DEFAULT 'owner',
     news_id     INTEGER NOT NULL REFERENCES news_items(id) ON DELETE CASCADE,
     action      VARCHAR(20) NOT NULL,       -- 'bookmark' | 'like' | 'dislike' | 'dismiss'
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -233,6 +234,14 @@ CREATE INDEX IF NOT EXISTS idx_feedback_news_id
 
 CREATE INDEX IF NOT EXISTS idx_feedback_created_at
     ON user_feedback (created_at DESC);
+
+-- Repeated clicks on the same button collapse to idempotent no-ops.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feedback_user_news_action
+    ON user_feedback (user_id, news_id, action);
+
+-- Fast "my bookmarks / my dismissed" lookups.
+CREATE INDEX IF NOT EXISTS idx_feedback_user_action_created
+    ON user_feedback (user_id, action, created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- Default topics

@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import APIRouter, status
 
 from finradar.api.deps import DbSession, EmbeddingDep
+from finradar.api.routes.feedback import _current_user_id
 from finradar.config import get_settings
 from finradar.models import NewsItem
 from finradar.schemas import (
@@ -129,6 +130,17 @@ def _build_hybrid_sql(request: SearchRequest, use_to_tsquery: bool) -> text:
         # Keep singletons and representatives only
         filter_sql.append(
             "AND (n.cluster_rep_id IS NULL OR n.cluster_rep_id = n.id)"
+        )
+
+    # Dismiss filter: hide articles the current user explicitly dismissed.
+    # hide_dismissed defaults to True on the request so this branch fires for
+    # normal searches; Bookmarks-style views set it to False.
+    if request.hide_dismissed:
+        filter_sql.append(
+            "AND NOT EXISTS ("
+            " SELECT 1 FROM user_feedback uf"
+            " WHERE uf.user_id = :current_user_id"
+            " AND uf.news_id = n.id AND uf.action = 'dismiss')"
         )
 
     filters_clause = "\n          ".join(filter_sql)
@@ -271,6 +283,8 @@ async def search_news(
         params["date_from"] = request.date_from
     if request.date_to:
         params["date_to"] = request.date_to
+    if request.hide_dismissed:
+        params["current_user_id"] = _current_user_id()
 
     result = await db.execute(stmt, params)
     rows = result.mappings().all()

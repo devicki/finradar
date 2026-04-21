@@ -63,25 +63,29 @@ def render_news_card(
     index: int | None = None,
     show_score: bool = False,
     show_cluster_expander: bool = True,
-    on_feedback: Callable[[int, str], None] | None = None,
+    show_feedback: bool = False,
+    feedback_state: list[str] | None = None,
     card_key: str | None = None,
 ) -> None:
     """Render one item in a bordered container.
 
     Args:
-        item: News item dict as returned by the API (NewsItemResponse /
-              NewsItemSearchResponse shape).
+        item: News item dict as returned by the API.
         index: Optional 1-based rank to prefix the title with "#N — …".
         show_score: When True and the item carries ``score`` /
                     ``score_breakdown`` (search results), render the
                     right-hand score panel.
         show_cluster_expander: When True and cluster_size ≥ 2, show the
                                inline "같은 스토리 N건" expander.
-        on_feedback: Reserved for Phase 3. Signature: ``(news_id, action)``
-                     where action ∈ {"like", "dislike", "bookmark", "dismiss"}.
-        card_key: Unique key prefix for any Streamlit widgets inside the
-                  card. Required if more than one card on a page has feedback
-                  buttons (Streamlit widget keys must be globally unique).
+        show_feedback: When True, render 👍/👎/🔖/🙈 buttons under the card.
+                       The caller batch-fetches current states and passes
+                       them via ``feedback_state`` so no per-card API calls.
+        feedback_state: List of actions currently set on this item, e.g.
+                        ``["like", "bookmark"]``. None = fall back to empty
+                        (equivalent to no active actions).
+        card_key: Unique key prefix for Streamlit widgets inside the card.
+                  Must be unique per card on a page; defaults to
+                  ``f"card_{item['id']}"`` when omitted.
     """
     with st.container(border=True):
         if show_score:
@@ -97,9 +101,12 @@ def render_news_card(
             with right:
                 _render_score_panel(item)
 
-        # Phase 3: feedback buttons (stub — parent opts in by passing on_feedback)
-        if on_feedback is not None and item.get("id") is not None:
-            _render_feedback_row(item["id"], on_feedback, card_key or f"card_{item['id']}")
+        if show_feedback and item.get("id") is not None:
+            _render_feedback_row(
+                item["id"],
+                feedback_state or [],
+                card_key or f"card_{item['id']}",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -192,18 +199,64 @@ def _render_score_panel(item: dict[str, Any]) -> None:
 
 def _render_feedback_row(
     news_id: int,
-    on_feedback: Callable[[int, str], None],
+    current_actions: list[str],
     key_prefix: str,
 ) -> None:
-    """Phase 3 feedback buttons (wiring stub).
+    """Render the 4 toggleable feedback buttons with live state.
 
-    The buttons are rendered but their clicks delegate to the caller's
-    `on_feedback` callback — Phase 3 will connect this to the backend.
+    Active actions show an active icon (e.g. 👍 on, ⚪ off); clicks post to
+    the API and immediately st.rerun so the next frame reflects the new
+    state. Like / dislike are mutually exclusive on the server side — this
+    UI simply submits whichever the user clicked and lets the API remove
+    the opposite row.
     """
-    c1, c2, c3, _ = st.columns([1, 1, 1, 7])
-    if c1.button("👍", key=f"{key_prefix}_like", help="좋아요"):
-        on_feedback(news_id, "like")
-    if c2.button("👎", key=f"{key_prefix}_dislike", help="싫어요"):
-        on_feedback(news_id, "dislike")
-    if c3.button("🔖", key=f"{key_prefix}_bookmark", help="북마크"):
-        on_feedback(news_id, "bookmark")
+    active = set(current_actions)
+
+    def _icon(action: str, on_icon: str, off_icon: str) -> str:
+        return on_icon if action in active else off_icon
+
+    labels = [
+        ("like",     _icon("like",     "👍", "🤍"), "좋아요"),
+        ("dislike",  _icon("dislike",  "👎", "⬜"), "싫어요"),
+        ("bookmark", _icon("bookmark", "🔖", "📑"), "북마크"),
+        ("dismiss",  _icon("dismiss",  "🙈", "👁️"), "숨김"),
+    ]
+
+    cols = st.columns([1, 1, 1, 1, 6])
+    for i, (action, icon, helptext) in enumerate(labels):
+        if cols[i].button(icon, key=f"{key_prefix}_{action}", help=helptext):
+            _handle_feedback_click(news_id, action, action in active)
+
+
+def _handle_feedback_click(news_id: int, action: str, currently_active: bool) -> None:
+    """Toggle the feedback on the server, invalidate session cache, rerun."""
+    if currently_active:
+        api_client.delete_feedback(news_id, action)
+    else:
+        api_client.submit_feedback(news_id, action)
+
+    # Invalidate the page's cached feedback snapshot so the next run re-fetches.
+    if "feedback_states" in st.session_state:
+        st.session_state.pop("feedback_states", None)
+    st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Helper for pages: batch-load feedback state for a list of items
+# ---------------------------------------------------------------------------
+
+
+def load_feedback_states(items: list[dict[str, Any]]) -> dict[int, list[str]]:
+    """Return ``{news_id: [actions]}`` for the rendered items.
+
+    Stores the result in ``st.session_state`` so toggle-driven reruns reuse
+    the value until a feedback click explicitly invalidates it.
+    """
+    ids = [it["id"] for it in items if it.get("id") is not None]
+    if not ids:
+        return {}
+
+    cache_key = "feedback_states"
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = api_client.feedback_status_batch(ids)
+    return st.session_state[cache_key]

@@ -25,7 +25,8 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from finradar.api.deps import CommonFilters, DbSession, PaginationParams, _apply_common_filters
-from finradar.models import NewsItem
+from finradar.api.routes.feedback import _current_user_id
+from finradar.models import NewsItem, UserFeedback
 from finradar.schemas import (
     FeedSummaryResponse,
     NewsItemResponse,
@@ -92,6 +93,14 @@ async def get_feed(
         default="latest",
         description="latest | cluster_size | sentiment_strength",
     ),
+    hide_dismissed: bool = Query(
+        default=True,
+        description=(
+            "When true (default), hide articles the current user dismissed "
+            "via the 🙈 button. Set to false to audit / unhide from the "
+            "Bookmarks 🙈 page."
+        ),
+    ),
 ) -> NewsListResponse:
     # Dedup predicate: keep singletons (cluster_rep_id IS NULL) and cluster reps
     # (cluster_rep_id = id).  Uses the idx_news_cluster_rep index for fast scans.
@@ -105,12 +114,30 @@ async def get_feed(
             )
         )
 
+    # Dismiss filter: exclude rows the current user explicitly hid via 🙈.
+    # Implemented as a correlated NOT EXISTS so the uq_feedback_user_news_action
+    # index keeps the subquery cheap.
+    def _apply_dismiss(stmt):
+        if not hide_dismissed:
+            return stmt
+        user_id = _current_user_id()
+        return stmt.where(
+            ~select(UserFeedback.id)
+            .where(
+                UserFeedback.user_id == user_id,
+                UserFeedback.news_id == NewsItem.id,
+                UserFeedback.action == "dismiss",
+            )
+            .exists()
+        )
+
     order_by = _SORT_OPTIONS.get(sort) or _SORT_OPTIONS["latest"]
 
     # Count
     count_stmt = select(func.count()).select_from(NewsItem)
     count_stmt = _apply_common_filters(count_stmt, filters)
     count_stmt = _apply_dedup(count_stmt)
+    count_stmt = _apply_dismiss(count_stmt)
     total: int = (await db.execute(count_stmt)).scalar_one()
 
     # Data
@@ -122,6 +149,7 @@ async def get_feed(
     )
     data_stmt = _apply_common_filters(data_stmt, filters)
     data_stmt = _apply_dedup(data_stmt)
+    data_stmt = _apply_dismiss(data_stmt)
     rows = (await db.execute(data_stmt)).scalars().all()
 
     return NewsListResponse(
