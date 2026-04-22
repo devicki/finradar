@@ -101,16 +101,23 @@ def evaluate_trigger(article: NewsItem) -> AlertTrigger:
     if x_meta.get("breaking") is True or yt_meta.get("category") == "breaking":
         reasons.append("breaking")
 
-    # 2. Strong sentiment + cluster size + sectors presence
+    # 2. Strong sentiment + cluster size + sectors presence.
+    # Language-specific cluster lower bound: English RSS produces smaller
+    # real-story clusters than Korean (different styling by each outlet vs.
+    # template-heavy KR press). Use the per-language floor so EN articles
+    # aren't systematically filtered out.
     sentiment = article.sentiment
     cluster_size = article.cluster_size or 1
     has_sectors = bool(article.sectors)
+    min_cluster = (
+        settings.alerts_min_cluster_size_en
+        if article.language == "en"
+        else settings.alerts_min_cluster_size
+    )
     if (
         sentiment is not None
         and abs(sentiment) >= settings.alerts_min_abs_sentiment
-        and settings.alerts_min_cluster_size
-        <= cluster_size
-        < settings.alerts_max_cluster_size
+        and min_cluster <= cluster_size < settings.alerts_max_cluster_size
         and (has_sectors or not settings.alerts_require_sectors)
     ):
         reasons.append("strong_sentiment")

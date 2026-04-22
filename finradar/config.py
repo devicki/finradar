@@ -175,7 +175,21 @@ class Settings(BaseSettings):
     alerts_min_cluster_size: int = Field(
         default=3,
         ge=1,
-        description="Minimum cluster size for the strong-sentiment trigger path.",
+        description=(
+            "Minimum cluster size for the strong-sentiment trigger. Applies to "
+            "Korean (ko) and other languages. English uses "
+            "``alerts_min_cluster_size_en`` below because EN RSS feeds rarely "
+            "duplicate the same headline verbatim, so real same-story clusters "
+            "settle around 2 members rather than 3+."
+        ),
+    )
+    alerts_min_cluster_size_en: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "English-only lower bound for the strong-sentiment trigger. Reflects "
+            "that EN news has lower natural cluster sizes than the Korean corpus."
+        ),
     )
     alerts_max_cluster_size: int = Field(
         default=50,

@@ -93,6 +93,72 @@ DEFAULT_RSS_FEEDS: list[dict[str, str]] = [
         "name": "Financial Times",
         "language": "en",
     },
+    # --- Tier S: 고품질 + 신선도 높음 (Phase 3에서 추가) ---
+    {
+        "url": "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
+        "name": "WSJ Markets",
+        "language": "en",
+    },
+    {
+        "url": "http://feeds.marketwatch.com/marketwatch/topstories/",
+        "name": "MarketWatch Top Stories",
+        "language": "en",
+    },
+    {
+        "url": "https://feeds.bloomberg.com/technology/news.rss",
+        "name": "Bloomberg Technology",
+        "language": "en",
+    },
+    {
+        "url": "https://feeds.bloomberg.com/politics/news.rss",
+        "name": "Bloomberg Politics",
+        "language": "en",
+    },
+    {
+        "url": "https://www.ft.com/companies?format=rss",
+        "name": "FT Companies",
+        "language": "en",
+    },
+    {
+        "url": "https://www.ft.com/markets?format=rss",
+        "name": "FT Markets",
+        "language": "en",
+    },
+    {
+        "url": "https://www.ft.com/global-economy?format=rss",
+        "name": "FT Global Economy",
+        "language": "en",
+    },
+    {
+        # Reuters dropped public RSS; Google News site-restricted query is
+        # the closest legitimate substitute for Reuters business news.
+        "url": "https://news.google.com/rss/search?q=when:24h+site:reuters.com+business&hl=en",
+        "name": "Reuters Business via Google News",
+        "language": "en",
+    },
+    {
+        "url": "https://markets.businessinsider.com/rss/news",
+        "name": "Business Insider Markets",
+        "language": "en",
+    },
+    {
+        "url": "https://www.businessinsider.com/rss",
+        "name": "Business Insider",
+        "language": "en",
+    },
+    {
+        "url": "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+        "name": "CNBC Finance",
+        "language": "en",
+    },
+    # --- Tier A: 보조 소스 ---
+    {
+        # Seeking Alpha ships empty <description> tags — rss_collector's
+        # body-fetch fallback pulls the full article body via trafilatura.
+        "url": "https://seekingalpha.com/feed.xml",
+        "name": "Seeking Alpha",
+        "language": "en",
+    },
     # --- Korean ---
     {
         "url": "https://www.hankyung.com/feed/economy",
