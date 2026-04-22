@@ -1223,8 +1223,14 @@ def cluster_news(
 ) -> dict[str, Any]:
     """Group recent articles into clusters via cosine-similarity connected components.
 
-    Scheduled every 30 minutes by Celery Beat. See
+    Scheduled every 15 minutes by Celery Beat (originally 30 min, shortened
+    in Phase 3 Day 3 follow-up so strong-sentiment alerts don't wait a full
+    half hour for their cluster_size to become >= 2/3).  See
     :py:func:`finradar.clustering.cluster_recent_articles` for the algorithm.
+
+    Chains :py:func:`send_breaking_alerts` on success so any freshly
+    clustered article can trigger an alert within seconds of its cluster
+    assignment instead of waiting for the next dispatcher Beat tick.
 
     Parameters
     ----------
@@ -1255,6 +1261,17 @@ def cluster_news(
     except Exception as exc:  # noqa: BLE001
         logger.error("cluster_news: failed — %s", exc, exc_info=True)
         raise self.retry(exc=exc)
+
+    # Chain: newly clustered articles may now satisfy the strong-sentiment
+    # trigger's cluster_size floor. Kicking the dispatcher immediately
+    # turns the usual "wait for next Beat tick" ~5 min lag into ~seconds
+    # while still respecting all the dedup / hourly-cap guards inside.
+    try:
+        send_breaking_alerts.apply_async()
+    except Exception as exc:  # noqa: BLE001 — chaining is best-effort
+        logger.warning(
+            "cluster_news: failed to chain send_breaking_alerts: %s", exc
+        )
 
     logger.info(
         "cluster_news: ok — considered=%d, edges=%d, clusters=%d, "

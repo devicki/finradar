@@ -107,11 +107,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "finradar"},
     },
     # Story grouping — connected components over cosine similarity.
-    # Runs every 30 minutes so new articles get their cluster assignment
-    # without blowing CPU on every collection cycle.
-    "cluster-news-every-30min": {
+    # Shortened from 30 → 15 minutes so strong-sentiment alerts don't have
+    # to wait half an hour for their cluster_size to become >= 2/3. The
+    # cluster_news task itself chains send_breaking_alerts on completion
+    # so freshly clustered articles fire within seconds.
+    "cluster-news-every-15min": {
         "task": "finradar.tasks.collection_tasks.cluster_news",
-        "schedule": 1800,  # 30 minutes
+        "schedule": 900,  # 15 minutes
         "options": {"queue": "finradar"},
     },
     # X (Twitter) timeline ingest — pay-as-you-go at $0.005/read.
