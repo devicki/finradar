@@ -76,14 +76,44 @@ def build_embed(
         triggers: list of reason strings returned by the dispatcher.
         finradar_url: optional internal URL (Streamlit Article page).
     """
-    title = _format_trigger_badge(triggers) + " · " + _truncate(
-        article.get("title") or "(제목 없음)", 200
-    )
+    title_text = article.get("title") or "(제목 없음)"
+    title = _format_trigger_badge(triggers) + " · " + _truncate(title_text, 200)
 
-    ai_summary = article.get("ai_summary") or article.get("summary")
-    description = _truncate(ai_summary or "", 600)
+    language = (article.get("language") or "").lower()
+    ai_summary = (article.get("ai_summary") or "").strip()
+    translated_title = (article.get("translated_title") or "").strip()
+    translated_summary = (article.get("translated_summary") or "").strip()
+    original_summary = (article.get("summary") or "").strip()
+
+    # Korean-first description: mirror the dashboard card template so the
+    # Discord feed scans the same way. EN articles get the translated
+    # Korean summary (with translated_title bolded on top when different
+    # from the English headline); KO articles get their native ai_summary.
+    description_parts: list[str] = []
+    if language == "en" and translated_title and translated_title != title_text:
+        description_parts.append(f"**🌐 {translated_title}**")
+
+    if language == "en" and translated_summary:
+        description_parts.append(translated_summary)
+    elif ai_summary:
+        description_parts.append(ai_summary)
+    elif original_summary:
+        description_parts.append(original_summary)
+
+    description = _truncate("\n\n".join(description_parts), 1200)
 
     fields: list[dict[str, Any]] = []
+
+    # For EN articles, keep the English AI summary available as a field so
+    # readers can compare the original phrasing without leaving Discord.
+    if language == "en" and ai_summary and ai_summary != translated_summary:
+        fields.append(
+            {
+                "name": "🇺🇸 English AI Summary",
+                "value": _truncate(ai_summary, 1024),
+                "inline": False,
+            }
+        )
 
     tickers = article.get("tickers") or []
     if tickers:

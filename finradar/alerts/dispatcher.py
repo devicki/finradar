@@ -231,6 +231,13 @@ def _article_to_payload(article: NewsItem) -> dict[str, Any]:
         "title": article.title,
         "summary": article.summary,
         "ai_summary": article.ai_summary,
+        # Korean translation fields — populated by the LLM enrich step for
+        # non-Korean articles. Earlier version of this payload silently
+        # dropped them, so the Discord embed fell back to the English AI
+        # summary only. Including them lets build_embed() render the
+        # Korean-first description just like the dashboard cards.
+        "translated_title": article.translated_title,
+        "translated_summary": article.translated_summary,
         "url": article.url,
         "source_type": article.source_type,
         "language": article.language,

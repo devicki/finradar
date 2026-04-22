@@ -125,14 +125,89 @@ def _render_card_left(
     prefix = f"#{index} — " if index is not None else ""
     st.markdown(f"**{prefix}[{title}]({url})**")
 
-    translated = item.get("translated_title")
-    if translated and translated != title:
-        st.caption(f"🌐 {translated}")
+    translated_title = (item.get("translated_title") or "").strip()
+    if translated_title and translated_title != title:
+        st.caption(f"🌐 {translated_title}")
 
-    ai_summary = item.get("ai_summary") or item.get("summary") or ""
-    if ai_summary:
-        with st.expander("요약 펼치기", expanded=False):
-            st.write(ai_summary[:1200])
+    # ------------------------------------------------------------------
+    # Summary area — unified "Korean-first" template so EN and KO cards
+    # feel the same to a Korean reader:
+    #
+    #                           INLINE (always shown)          EXPANDER
+    #   KO article  |  📝 ai_summary (native Korean)      |  📰 원문
+    #   EN article  |  📝 translated_summary (Korean)     |  🇺🇸 English AI
+    #               |                                      |  📰 원문 (English)
+    #
+    # The inline block is always the Korean-readable digest so you can
+    # scan a whole page without clicking; the expander exposes the
+    # English original AI summary (EN only) plus the raw source body for
+    # either language.
+    # ------------------------------------------------------------------
+    ai_summary = (item.get("ai_summary") or "").strip()
+    translated_summary = (item.get("translated_summary") or "").strip()
+    original_summary = (item.get("summary") or "").strip()
+    language = (item.get("language") or "").lower()
+
+    # Choose the "Korean-facing" summary for the inline preview.
+    # EN articles: prefer translated_summary (Korean); fall back to ai_summary
+    # KO articles: use ai_summary (already Korean); translated_summary is empty
+    if language == "en" and translated_summary:
+        inline_summary = translated_summary
+    elif ai_summary:
+        inline_summary = ai_summary
+    else:
+        inline_summary = ""
+
+    _preview_len = 400
+    if inline_summary:
+        if len(inline_summary) <= _preview_len:
+            st.write(f"📝 {inline_summary}")
+        else:
+            st.write(f"📝 {inline_summary[:_preview_len]}…")
+    elif original_summary:
+        # No AI enrichment yet (usually because FinBERT scored the item as
+        # neutral and the enrich filter skipped it). Show the raw body so
+        # the card still has readable content.
+        preview = original_summary[:_preview_len]
+        if len(original_summary) > _preview_len:
+            preview += "…"
+        st.write(f"📰 {preview}")
+
+    # Expander decision: something extra to reveal beyond the inline preview?
+    #   - inline summary truncated
+    #   - EN article: English ai_summary is extra content we haven't shown yet
+    #   - original RSS body is distinct from the inline preview
+    has_more = bool(
+        (inline_summary and len(inline_summary) > _preview_len)
+        or (language == "en" and ai_summary and ai_summary != inline_summary)
+        or (
+            original_summary
+            and original_summary != inline_summary
+            and (len(original_summary) > _preview_len or inline_summary)
+        )
+    )
+    if has_more:
+        with st.expander("전체 요약 · 원문", expanded=False):
+            # Korean-facing AI summary (either native KO or the translation).
+            if inline_summary:
+                label = "🌐 한국어 번역 요약" if language == "en" else "📝 AI 요약"
+                st.markdown(f"**{label}**")
+                st.write(inline_summary[:2500])
+
+            # English AI summary — only when the original ai_summary differs
+            # from the inline block (EN articles).
+            if language == "en" and ai_summary and ai_summary != inline_summary:
+                if inline_summary:
+                    st.markdown("---")
+                st.markdown("**🇺🇸 English AI Summary**")
+                st.write(ai_summary[:2500])
+
+            # Original RSS / body-fetch content (any language).
+            if original_summary and original_summary not in (inline_summary, ai_summary):
+                if inline_summary or ai_summary:
+                    st.markdown("---")
+                st.markdown("**📰 원문 (RSS / 본문)**")
+                st.write(original_summary[:4000])
 
     # --- meta row -----------------------------------------------------------
     # Prefer the source's published_at; fall back to first_seen_at when
