@@ -118,6 +118,8 @@ def _build_hybrid_sql(request: SearchRequest, use_to_tsquery: bool) -> text:
         filter_sql.append("AND n.language = :language")
     if request.sentiment_label:
         filter_sql.append("AND n.sentiment_label = :sentiment_label")
+    if request.llm_sentiment_label:
+        filter_sql.append("AND n.llm_sentiment_label = :llm_sentiment_label")
     if request.tickers:
         filter_sql.append("AND n.tickers @> :tickers")
     if request.sectors:
@@ -275,6 +277,8 @@ async def search_news(
         params["language"] = request.language
     if request.sentiment_label:
         params["sentiment_label"] = request.sentiment_label
+    if request.llm_sentiment_label:
+        params["llm_sentiment_label"] = request.llm_sentiment_label
     if request.tickers:
         params["tickers"] = request.tickers
     if request.sectors:

@@ -165,7 +165,18 @@ class SearchRequest(BaseModel):
     )
     sentiment_label: Literal["positive", "negative", "neutral"] | None = Field(
         default=None,
-        description="Filter by FinBERT sentiment label",
+        description=(
+            "Filter by the local sentiment label (FinBERT for EN, "
+            "KR-FinBert-SC for KO)"
+        ),
+    )
+    llm_sentiment_label: Literal["positive", "negative", "neutral"] | None = Field(
+        default=None,
+        description=(
+            "Filter by the cloud-LLM sentiment label. Independent of "
+            "sentiment_label — providing both requires BOTH columns to "
+            "match, which is the dual-signal-agreement subset."
+        ),
     )
     tickers: list[str] | None = Field(
         default=None,

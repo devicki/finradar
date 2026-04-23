@@ -54,10 +54,21 @@ with st.sidebar.expander("필터", expanded=True):
         options=["(전체)", "rss", "api", "x_feed", "youtube_post", "url_report"],
         index=0,
     )
+    # Two independent sentiment filters: Local (FinBERT/KR-FinBert-SC) and
+    # LLM. Supplying both requires an article to match BOTH labels — that's
+    # how you query the dual-signal-agreement subset (same subset the alert
+    # dispatcher's strong_sentiment gate fires on).
     sentiment_label = st.selectbox(
-        "감성",
+        "감성 (Local)",
         options=["(전체)", "positive", "negative", "neutral"],
         index=0,
+        help="로컬 모델 라벨: FinBERT(EN) / KR-FinBert-SC(KO)",
+    )
+    llm_sentiment_label = st.selectbox(
+        "감성 (LLM)",
+        options=["(전체)", "positive", "negative", "neutral"],
+        index=0,
+        help="클라우드 LLM 라벨 (enrich 단계 산출). 둘 다 골라두면 두 신호 일치분만.",
     )
     ticker = st.text_input("티커 (단일)", placeholder="AAPL")
     sector = st.text_input("섹터 (단일)", placeholder="반도체")
@@ -89,6 +100,9 @@ with st.spinner("피드 로드 중..."):
         language=None if language == "(전체)" else language,
         source_type=None if source_type == "(전체)" else source_type,
         sentiment_label=None if sentiment_label == "(전체)" else sentiment_label,
+        llm_sentiment_label=(
+            None if llm_sentiment_label == "(전체)" else llm_sentiment_label
+        ),
         ticker=ticker.strip() or None,
         sector=sector.strip() or None,
         date_from=date_from.isoformat() if use_date_filter else None,

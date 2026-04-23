@@ -56,6 +56,7 @@ def search(
     language: str | None = None,
     source_type: str | None = None,
     sentiment_label: str | None = None,
+    llm_sentiment_label: str | None = None,
     tickers: list[str] | None = None,
     sectors: list[str] | None = None,
     include_scores: bool = True,
@@ -71,6 +72,10 @@ def search(
 
     응답에는 매칭된 기사 items 와, 동의어 확장이 적용된 경우
     ``query_expansion`` (original, tsquery_expr, expanded_tokens) 필드가 포함된다.
+
+    sentiment_label = 로컬 모델(FinBERT/KR-FinBert-SC) 라벨 필터
+    llm_sentiment_label = 클라우드 LLM 라벨 필터
+    둘 다 지정하면 AND 조건 (dual-agree 서브셋만).
     """
     return _post(
         "/search/",
@@ -79,6 +84,7 @@ def search(
             "language": language,
             "source_type": source_type,
             "sentiment_label": sentiment_label,
+            "llm_sentiment_label": llm_sentiment_label,
             "tickers": tickers,
             "sectors": sectors,
             "include_scores": include_scores,
@@ -175,6 +181,7 @@ def feed(
     language: str | None = None,
     source_type: str | None = None,
     sentiment_label: str | None = None,
+    llm_sentiment_label: str | None = None,
     ticker: str | None = None,
     sector: str | None = None,
     date_from: str | None = None,
@@ -189,6 +196,9 @@ def feed(
     Args:
         sort: latest | cluster_size | sentiment_strength
         dedup: True → 클러스터 대표만 (기본), False → 모두
+        sentiment_label: 로컬 모델(FinBERT/KR-FinBert-SC) 라벨 필터
+        llm_sentiment_label: 클라우드 LLM 라벨 필터. 두 인자를 같이 주면
+            두 신호가 모두 일치해야 결과에 포함됨 (dual-agree 서브셋).
     """
     return _get(
         "/feed/",
@@ -196,6 +206,7 @@ def feed(
             "language": language,
             "source_type": source_type,
             "sentiment_label": sentiment_label,
+            "llm_sentiment_label": llm_sentiment_label,
             "ticker": ticker,
             "sector": sector,
             "date_from": date_from,

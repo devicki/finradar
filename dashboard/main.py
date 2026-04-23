@@ -42,10 +42,20 @@ with st.sidebar.expander("필터", expanded=True):
         options=["(전체)", "rss", "api", "x_feed", "youtube_post", "url_report"],
         index=0,
     )
+    # Two independent sentiment filters — same pattern as the Latest page.
+    # Supplying both AND-combines them, giving the dual-signal-agreement
+    # subset (the same subset the Discord alert gate fires on).
     sentiment_label = st.selectbox(
-        "감성",
+        "감성 (Local)",
         options=["(전체)", "positive", "negative", "neutral"],
         index=0,
+        help="로컬 모델 라벨: FinBERT(EN) / KR-FinBert-SC(KO)",
+    )
+    llm_sentiment_label = st.selectbox(
+        "감성 (LLM)",
+        options=["(전체)", "positive", "negative", "neutral"],
+        index=0,
+        help="클라우드 LLM 라벨 (enrich 단계 산출). 둘 다 고르면 두 신호 일치분만.",
     )
     ticker_input = st.text_input("티커 (쉼표 구분)", placeholder="AAPL, NVDA")
     sector_input = st.text_input("섹터 (쉼표 구분)", placeholder="반도체, AI")
@@ -163,6 +173,9 @@ with st.spinner("하이브리드 검색 중..."):
         language=None if language == "(전체)" else language,
         source_type=None if source_type == "(전체)" else source_type,
         sentiment_label=None if sentiment_label == "(전체)" else sentiment_label,
+        llm_sentiment_label=(
+            None if llm_sentiment_label == "(전체)" else llm_sentiment_label
+        ),
         tickers=_parse_list(ticker_input),
         sectors=_parse_list(sector_input),
         include_scores=True,

@@ -129,7 +129,19 @@ class CommonFilters:
     )
     sentiment_label: str | None = Query(
         default=None,
-        description="FinBERT label filter: positive | negative | neutral",
+        description=(
+            "Local sentiment label filter (FinBERT for EN, KR-FinBert-SC for KO): "
+            "positive | negative | neutral"
+        ),
+    )
+    llm_sentiment_label: str | None = Query(
+        default=None,
+        description=(
+            "LLM sentiment label filter (from enrich step): "
+            "positive | negative | neutral. Independent of sentiment_label — "
+            "supplying both requires BOTH columns to match their respective value, "
+            "which is how callers query the dual-signal-agreement subset."
+        ),
     )
     ticker: str | None = Query(
         default=None,
@@ -170,6 +182,8 @@ def _apply_common_filters(stmt: "Select", filters: CommonFilters) -> "Select":
         stmt = stmt.where(NewsItem.language == filters.language)
     if filters.sentiment_label:
         stmt = stmt.where(NewsItem.sentiment_label == filters.sentiment_label)
+    if filters.llm_sentiment_label:
+        stmt = stmt.where(NewsItem.llm_sentiment_label == filters.llm_sentiment_label)
     if filters.ticker:
         stmt = stmt.where(NewsItem.tickers.contains([filters.ticker]))
     if filters.sector:
