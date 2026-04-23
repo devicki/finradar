@@ -1249,23 +1249,33 @@ def cluster_news(
         Overrides :py:data:`finradar.clustering.DEFAULT_COSINE_THRESHOLD` (0.80).
     """
     from finradar.clustering import (  # noqa: PLC0415 — lazy to avoid import cost
-        DEFAULT_COSINE_THRESHOLD,
-        DEFAULT_WINDOW_DAYS,
         cluster_recent_articles,
     )
 
-    w = window_days if window_days is not None else DEFAULT_WINDOW_DAYS
-    t = threshold if threshold is not None else DEFAULT_COSINE_THRESHOLD
+    s = settings  # alias for readability below
+    w = window_days if window_days is not None else s.cluster_window_days
+    t = threshold if threshold is not None else s.cluster_cosine_threshold
 
     logger.info(
-        "cluster_news: starting (window=%dd, threshold=%.2f)", w, t
+        "cluster_news: starting (window=%dd, cos>=%.2f / same-lang>=%.2f, "
+        "overlap>=%d ratio>=%.2f, body_jac>=%.2f)",
+        w, t, s.cluster_same_lang_cosine,
+        s.cluster_title_overlap_min, s.cluster_title_overlap_ratio,
+        s.cluster_min_body_jaccard,
     )
     self.update_state(state="STARTED", meta={"stage": "clustering"})
 
     try:
         with SyncSessionLocal() as session:
             result = cluster_recent_articles(
-                session, window_days=w, threshold=t
+                session,
+                window_days=w,
+                threshold=t,
+                same_lang_cosine=s.cluster_same_lang_cosine,
+                title_overlap_min=s.cluster_title_overlap_min,
+                title_overlap_ratio=s.cluster_title_overlap_ratio,
+                min_body_jaccard=s.cluster_min_body_jaccard,
+                apply_stopwords=s.cluster_apply_stopwords,
             )
     except Exception as exc:  # noqa: BLE001
         logger.error("cluster_news: failed — %s", exc, exc_info=True)

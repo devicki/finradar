@@ -233,6 +233,72 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -------------------------------------------------------------------------
+    # Clustering — connected-components over cosine similarity + guards
+    # -------------------------------------------------------------------------
+    cluster_window_days: int = Field(
+        default=7,
+        ge=1,
+        description="Recency window (days) for the cluster_news Beat task.",
+    )
+    cluster_cosine_threshold: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Baseline cosine similarity for the SQL KNN pull. Cross-language "
+            "pairs use this value directly (multilingual embedding already "
+            "separates KR/EN distinctly)."
+        ),
+    )
+    cluster_same_lang_cosine: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Tighter cosine floor for same-language pairs, applied in Python. "
+            "The multilingual embedding compresses Korean news into a dense "
+            "region — 0.80 catches unrelated template chains in KR corpora, "
+            "0.85 breaks them without losing cross-lingual matches."
+        ),
+    )
+    cluster_title_overlap_min: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "Required shared title tokens for same-language pairs. Raised from "
+            "1 → 2 to kill Korean template over-clusters (finance boilerplate "
+            "like '1분기 실적' provided weak chain edges at overlap_min=1)."
+        ),
+    )
+    cluster_title_overlap_ratio: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "shared_tokens / min(|A|,|B|) floor. Guards against '2 shared "
+            "boilerplate tokens out of 20' pairs passing the raw count."
+        ),
+    )
+    cluster_min_body_jaccard: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Summary-body 2-shingle Jaccard floor for same-language pairs. "
+            "Catches near-identical headlines that actually describe different "
+            "stories (template RSS over-cosine problem). Set to 0 to disable."
+        ),
+    )
+    cluster_apply_stopwords: bool = Field(
+        default=True,
+        description=(
+            "Drop KR + EN finance boilerplate stopwords (1분기 / 실적 / q1 / "
+            "earnings / ...) from the title token set. Almost always desirable; "
+            "turn off only for A/B experiments."
+        ),
+    )
+
     discord_enabled: bool = Field(
         default=False,
         description="Send alerts to Discord via webhook when true.",
