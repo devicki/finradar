@@ -172,6 +172,20 @@ class Settings(BaseSettings):
         le=1.0,
         description="|sentiment| threshold that — combined with cluster size — can trigger an alert.",
     )
+    alerts_llm_rescue_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "|llm_sentiment| threshold for the LLM-rescue branch of strong_sentiment. "
+            "Fires an alert when the LLM signal alone is at or above this bar, "
+            "even if the local sentiment model (FinBERT/KR-FinBert-SC) scored the "
+            "article weakly. Intentionally stricter than alerts_min_abs_sentiment "
+            "because we're bypassing cross-model agreement. Cluster gates and the "
+            "sectors requirement still apply — the rescue only relaxes the local-"
+            "model strength check, not the clustering / quality guards."
+        ),
+    )
     alerts_min_cluster_size: int = Field(
         default=3,
         ge=1,

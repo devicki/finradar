@@ -139,7 +139,15 @@ def evaluate_trigger(article: NewsItem) -> AlertTrigger:
             sentiment is not None
             and (sentiment >= 0) == (llm_sentiment >= 0)
         )
-        sentiment_ok = local_strong and llm_strong and signs_agree
+        dual_agree = local_strong and llm_strong and signs_agree
+        # LLM rescue: the local model sometimes under-scores market-impactful
+        # articles (see notes on enrich filter coverage). When the LLM alone
+        # is very confident — stricter than the dual-gate threshold to
+        # compensate for the missing cross-model check — we still fire the
+        # trigger. Cluster gates and the sectors requirement below continue
+        # to apply; the rescue only relaxes the local-strength requirement.
+        llm_rescue = abs(llm_sentiment) >= settings.alerts_llm_rescue_threshold
+        sentiment_ok = dual_agree or llm_rescue
 
     if (
         sentiment_ok
