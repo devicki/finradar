@@ -8,7 +8,7 @@ Central table of the FinRadar platform.  Each row represents a unique
 Column groups:
 - Identity / source metadata
 - Timestamps & deduplication
-- AI analysis output (FinBERT sentiment, cloud LLM summary/translation)
+- AI analysis output (local sentiment: FinBERT/KR-FinBert-SC, cloud LLM summary/translation)
 - Structured tags (tickers, sectors)
 - Search artifacts (pgvector embedding, PostgreSQL FTS tsvector)
 """
@@ -92,11 +92,30 @@ class NewsItem(Base):
     # ------------------------------------------------------------------
     sentiment: Mapped[Optional[float]] = mapped_column(
         Float,
-        comment="Continuous score in [-1.0, +1.0] from FinBERT",
+        comment=(
+            "Continuous score in [-1.0, +1.0] from the local sentiment model "
+            "(FinBERT for EN articles, KR-FinBert-SC for KO; selected by "
+            "finradar.processors.sentiment.get_sentiment_analyzer)."
+        ),
     )
     sentiment_label: Mapped[Optional[str]] = mapped_column(
         String(10),
-        comment="positive | negative | neutral",
+        comment="positive | negative | neutral (from the local sentiment model)",
+    )
+    # Second sentiment signal from the cloud LLM, produced during enrichment.
+    # Kept separate from the local-model columns above — see
+    # migrate_006_llm_sentiment.sql.  Used by the alert dispatcher to require
+    # local + LLM agreement on the strong_sentiment trigger; prevents
+    # keyword-only misfires by FinBERT (EN) or KR-FinBert-SC (KO).  NULL for
+    # pre-enrich / pre-migration rows, in which case evaluate_trigger falls
+    # back to local-sentiment-only.
+    llm_sentiment: Mapped[Optional[float]] = mapped_column(
+        Float,
+        comment="Continuous score in [-1.0, +1.0] emitted by the enrich LLM",
+    )
+    llm_sentiment_label: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        comment="positive | negative | neutral (from the enrich LLM)",
     )
     source_type: Mapped[Optional[str]] = mapped_column(
         String(20),

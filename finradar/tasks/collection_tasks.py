@@ -768,6 +768,15 @@ def enrich_with_llm(self: Task, news_id: int) -> dict[str, Any]:
         update_kwargs["tickers"] = enrichment["tickers"]
     if not item_sectors and enrichment.get("sectors"):
         update_kwargs["sectors"] = enrichment["sectors"]
+    # LLM-side sentiment signal for the dual-signal alert gate (migrate_006).
+    # Persist even when the value is 0.0 — that's a real "truly neutral"
+    # verdict and the dispatcher needs to see it rather than fall back to
+    # the local-sentiment-only path (FinBERT/KR-FinBert-SC). Only skip when
+    # the LLM omitted the field entirely.
+    if enrichment.get("sentiment") is not None:
+        update_kwargs["llm_sentiment"] = enrichment["sentiment"]
+    if enrichment.get("sentiment_label"):
+        update_kwargs["llm_sentiment_label"] = enrichment["sentiment_label"]
 
     # --- Persist ---
     if len(update_kwargs) <= 1:

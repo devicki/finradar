@@ -132,7 +132,15 @@ _ENRICH_ALL_SYSTEM = (
     "  \"tickers\": An array of uppercase stock ticker symbols mentioned "
     "(e.g. [\"AAPL\", \"TSLA\"]). Use empty array [] if none found.\n"
     "  \"sectors\": An array of relevant financial sectors in Korean "
-    "(e.g. [\"반도체\", \"AI\", \"에너지\"]). Use empty array [] if none found.\n\n"
+    "(e.g. [\"반도체\", \"AI\", \"에너지\"]). Use empty array [] if none found.\n"
+    "  \"sentiment\": A float in [-1.0, +1.0] measuring how the news would "
+    "affect the price of the primary assets involved. "
+    "Positive means bullish / constructive, negative means bearish / adverse, "
+    "0 means truly neutral. Judge the MARKET IMPACT of the facts, not the "
+    "emotional tone of the language. E.g. \"war fuels trading boom\" is positive "
+    "for the brokerage named, not negative just because the word \"war\" appears.\n"
+    "  \"sentiment_label\": One of \"positive\", \"negative\", \"neutral\", "
+    "derived from sentiment (roughly: >= 0.2 positive, <= -0.2 negative, else neutral).\n\n"
     "Rules:\n"
     "  - Use professional financial language.\n"
     "  - Preserve all ticker symbols, numeric values, percentages, and currency symbols unchanged.\n"
@@ -141,7 +149,8 @@ _ENRICH_ALL_SYSTEM = (
     "{\"ai_summary\": \"NVIDIA reported Q3 revenue of $35.1B, beating estimates by 12%...\", "
     "\"translated_title\": \"엔비디아, AI 칩 수요 급증으로 3분기 실적 예상치 상회\", "
     "\"translated_summary\": \"엔비디아가 3분기 매출 351억 달러를 기록하며...\", "
-    "\"tickers\": [\"NVDA\"], \"sectors\": [\"반도체\", \"AI\"]}"
+    "\"tickers\": [\"NVDA\"], \"sectors\": [\"반도체\", \"AI\"], "
+    "\"sentiment\": 0.72, \"sentiment_label\": \"positive\"}"
 )
 
 # 한국어 기사 전용 enrich 프롬프트. 이미 한국어라 번역은 불필요하며, 요약도
@@ -160,7 +169,13 @@ _ENRICH_KO_SYSTEM = (
     "  \"tickers\": 기사에서 언급된 대문자 티커 심볼 배열 "
     "(예: [\"AAPL\", \"005930.KS\"]). 없으면 빈 배열 [].\n"
     "  \"sectors\": 한국어 섹터/테마 배열 "
-    "(예: [\"반도체\", \"AI\", \"바이오\", \"에너지\"]). 없으면 빈 배열 [].\n\n"
+    "(예: [\"반도체\", \"AI\", \"바이오\", \"에너지\"]). 없으면 빈 배열 [].\n"
+    "  \"sentiment\": [-1.0, +1.0] 범위의 실수. 기사가 관련 자산의 가격에 미칠 영향을 판단하세요. "
+    "양수는 강세/호재, 음수는 약세/악재, 0은 진짜 중립. "
+    "표현의 감정 톤이 아니라 사실의 시장 영향을 평가해야 합니다. "
+    "예: \"목표가 상향\" 헤드라인은 positive, \"실적 쇼크\" 는 negative.\n"
+    "  \"sentiment_label\": \"positive\" | \"negative\" | \"neutral\" 중 하나. "
+    "sentiment 값에서 유도 (대략: 0.2 이상 positive, -0.2 이하 negative, 그 외 neutral).\n\n"
     "규칙:\n"
     "  - 전문적이고 간결한 금융 언어를 사용하세요.\n"
     "  - 티커, 숫자, 퍼센트, 통화 기호는 원문 그대로 유지하세요.\n"
@@ -169,7 +184,8 @@ _ENRICH_KO_SYSTEM = (
     "{\"ai_summary\": \"삼성전자가 3분기 매출 79조원을 기록하며 전년 동기 대비 17% 증가했다. "
     "반도체 부문이 실적을 견인했다.\", "
     "\"translated_title\": \"\", \"translated_summary\": \"\", "
-    "\"tickers\": [\"005930.KS\"], \"sectors\": [\"반도체\", \"AI\"]}"
+    "\"tickers\": [\"005930.KS\"], \"sectors\": [\"반도체\", \"AI\"], "
+    "\"sentiment\": 0.65, \"sentiment_label\": \"positive\"}"
 )
 
 
@@ -587,10 +603,32 @@ class LLMProcessor:
             "translated_summary": "",
             "tickers": [],
             "sectors": [],
+            "sentiment": None,
+            "sentiment_label": None,
         }
 
         if not raw:
             return empty
+
+        def _coerce_sentiment(val: Any) -> float | None:
+            try:
+                f = float(val)
+            except (TypeError, ValueError):
+                return None
+            # Clamp into [-1.0, +1.0] in case the model returns a small overshoot.
+            return max(-1.0, min(1.0, f))
+
+        def _coerce_label(val: Any, score: float | None) -> str | None:
+            raw_label = str(val or "").strip().lower()
+            if raw_label in ("positive", "negative", "neutral"):
+                return raw_label
+            if score is None:
+                return None
+            if score >= 0.2:
+                return "positive"
+            if score <= -0.2:
+                return "negative"
+            return "neutral"
 
         def _normalise(data: Any) -> dict[str, Any]:
             if not isinstance(data, dict):
@@ -601,6 +639,8 @@ class LLMProcessor:
                 "translated_summary": str(data.get("translated_summary", "")).strip(),
                 "tickers": [],
                 "sectors": [],
+                "sentiment": None,
+                "sentiment_label": None,
             }
             tickers = data.get("tickers", [])
             sectors = data.get("sectors", [])
@@ -608,6 +648,9 @@ class LLMProcessor:
                 result["tickers"] = [str(t).upper().strip() for t in tickers if t]
             if isinstance(sectors, list):
                 result["sectors"] = [str(s).strip() for s in sectors if s]
+            score = _coerce_sentiment(data.get("sentiment"))
+            result["sentiment"] = score
+            result["sentiment_label"] = _coerce_label(data.get("sentiment_label"), score)
             return result
 
         # Strategy 1: direct parse

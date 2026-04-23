@@ -106,7 +106,18 @@ def evaluate_trigger(article: NewsItem) -> AlertTrigger:
     # real-story clusters than Korean (different styling by each outlet vs.
     # template-heavy KR press). Use the per-language floor so EN articles
     # aren't systematically filtered out.
+    #
+    # Dual-signal gate (migrate_006): when the LLM also produced a sentiment
+    # score during enrichment, require BOTH the local sentiment model
+    # (FinBERT for EN, KR-FinBert-SC for KO) and the LLM to exceed the
+    # magnitude threshold AND agree on sign. Prevents keyword-only misfires
+    # from the local model — e.g. "war fuels trading boom" tagged negative
+    # by FinBERT, or Korean awards/crime headlines over-scoring on
+    # KR-FinBert-SC. When llm_sentiment IS NULL (pre-migration rows / enrich
+    # not yet run) we fall back to local-only so existing candidates don't
+    # silently disappear.
     sentiment = article.sentiment
+    llm_sentiment = article.llm_sentiment
     cluster_size = article.cluster_size or 1
     has_sectors = bool(article.sectors)
     min_cluster = (
@@ -114,9 +125,24 @@ def evaluate_trigger(article: NewsItem) -> AlertTrigger:
         if article.language == "en"
         else settings.alerts_min_cluster_size
     )
-    if (
+
+    local_strong = (
         sentiment is not None
         and abs(sentiment) >= settings.alerts_min_abs_sentiment
+    )
+    if llm_sentiment is None:
+        # Fallback path: LLM didn't emit a score (legacy row or enrich failure).
+        sentiment_ok = local_strong
+    else:
+        llm_strong = abs(llm_sentiment) >= settings.alerts_min_abs_sentiment
+        signs_agree = (
+            sentiment is not None
+            and (sentiment >= 0) == (llm_sentiment >= 0)
+        )
+        sentiment_ok = local_strong and llm_strong and signs_agree
+
+    if (
+        sentiment_ok
         and min_cluster <= cluster_size < settings.alerts_max_cluster_size
         and (has_sectors or not settings.alerts_require_sectors)
     ):
