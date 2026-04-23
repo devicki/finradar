@@ -126,13 +126,38 @@ def build_embed(
             {"name": "🏷️ Sectors", "value": ", ".join(sectors[:10]), "inline": True}
         )
 
+    # Dual-signal sentiment field: show both the local model (FinBERT for EN,
+    # KR-FinBert-SC for KO) and the cloud LLM on their own lines so the reader
+    # can see the agreement (or gap) that drove the alert. Fall back gracefully
+    # when only one signal is present — e.g. pre-migration rows have no
+    # llm_sentiment yet, and the legacy single-line layout is the right thing.
     sentiment_label = article.get("sentiment_label")
     sentiment_score = article.get("sentiment")
-    if sentiment_label:
-        sent_text = sentiment_label
-        if sentiment_score is not None:
-            sent_text = f"{sentiment_label} ({float(sentiment_score):+.2f})"
-        fields.append({"name": "감성", "value": sent_text, "inline": True})
+    llm_label = article.get("llm_sentiment_label")
+    llm_score = article.get("llm_sentiment")
+
+    def _fmt(label: str | None, score) -> str | None:
+        if label is None and score is None:
+            return None
+        if score is None:
+            return str(label)
+        score_txt = f"{float(score):+.2f}"
+        return f"{label} ({score_txt})" if label else score_txt
+
+    local_line = _fmt(sentiment_label, sentiment_score)
+    llm_line = _fmt(llm_label, llm_score)
+
+    if local_line or llm_line:
+        if local_line and llm_line:
+            value = (
+                f"🧠 Local: {local_line}\n"
+                f"☁️ LLM:   {llm_line}"
+            )
+        elif local_line:
+            value = local_line
+        else:
+            value = f"☁️ LLM: {llm_line}"
+        fields.append({"name": "감성", "value": value, "inline": True})
 
     original_url = article.get("url")
     link_lines: list[str] = []

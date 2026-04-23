@@ -276,12 +276,28 @@ for i, item in enumerate(items, start=1 + (int(page) - 1) * int(page_size)):
             source_badge = source_badges.get(item.get("source_type"), item.get("source_type") or "")
 
             # 메타 정보 (날짜는 published_at 우선, 없으면 first_seen_at)
+            # Sentiment: Local + LLM 분리 표기. LLM 없는 legacy 행은 Local 만.
             _publish_ts = item.get("published_at") or item.get("first_seen_at")
-            meta_parts = [
-                _sentiment_badge(item.get("sentiment_label"), item.get("sentiment")),
-                f"🌏 {item.get('language') or '?'}",
-                f"📅 {_fmt_ts(_publish_ts)}",
-            ]
+            _local_badge = "L:" + _sentiment_badge(
+                item.get("sentiment_label"), item.get("sentiment")
+            )
+            meta_parts = [_local_badge]
+            if (
+                item.get("llm_sentiment") is not None
+                or item.get("llm_sentiment_label")
+            ):
+                meta_parts.append(
+                    "A:" + _sentiment_badge(
+                        item.get("llm_sentiment_label"),
+                        item.get("llm_sentiment"),
+                    )
+                )
+            meta_parts.extend(
+                [
+                    f"🌏 {item.get('language') or '?'}",
+                    f"📅 {_fmt_ts(_publish_ts)}",
+                ]
+            )
             if source_badge:
                 meta_parts.append(source_badge)
             if item.get("tickers"):

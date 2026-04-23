@@ -33,6 +33,19 @@ class NewsItemResponse(BaseModel):
     language: str | None
     sentiment: float | None
     sentiment_label: str | None
+    llm_sentiment: float | None = Field(
+        default=None,
+        description=(
+            "Cloud-LLM sentiment score in [-1.0, +1.0]. Populated during enrich; "
+            "NULL for rows ingested before migrate_006 or when enrich hasn't run. "
+            "Paired with ``sentiment`` (local FinBERT/KR-FinBert-SC) in the alert "
+            "dispatcher's dual-signal gate."
+        ),
+    )
+    llm_sentiment_label: str | None = Field(
+        default=None,
+        description="positive | negative | neutral from the enrich LLM",
+    )
     translated_title: str | None
     translated_summary: str | None
     ai_summary: str | None

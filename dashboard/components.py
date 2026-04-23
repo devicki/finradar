@@ -212,12 +212,28 @@ def _render_card_left(
     # --- meta row -----------------------------------------------------------
     # Prefer the source's published_at; fall back to first_seen_at when
     # missing (legacy rows, or ingest paths without a date).
+    #
+    # Sentiment is now two signals — local model (FinBERT/KR-FinBert-SC) and
+    # the cloud LLM. We label them with "L:" / "A:" (Local / AI) so a reader
+    # can spot the gap at a glance. Pre-migration rows (no llm_sentiment yet)
+    # render only the local badge, preserving the original compact layout.
     publish_ts = item.get("published_at") or item.get("first_seen_at")
-    meta_parts = [
-        sentiment_badge(item.get("sentiment_label"), item.get("sentiment")),
-        f"🌏 {item.get('language') or '?'}",
-        f"📅 {format_ts(publish_ts)}",
-    ]
+    local_badge = "L:" + sentiment_badge(
+        item.get("sentiment_label"), item.get("sentiment")
+    )
+    meta_parts: list[str] = [local_badge]
+    if item.get("llm_sentiment") is not None or item.get("llm_sentiment_label"):
+        meta_parts.append(
+            "A:" + sentiment_badge(
+                item.get("llm_sentiment_label"), item.get("llm_sentiment")
+            )
+        )
+    meta_parts.extend(
+        [
+            f"🌏 {item.get('language') or '?'}",
+            f"📅 {format_ts(publish_ts)}",
+        ]
+    )
     sbadge = source_badge(item.get("source_type"))
     if sbadge:
         meta_parts.append(sbadge)

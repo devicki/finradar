@@ -277,6 +277,14 @@ def _article_to_payload(article: NewsItem) -> dict[str, Any]:
         "language": article.language,
         "sentiment": float(article.sentiment) if article.sentiment is not None else None,
         "sentiment_label": article.sentiment_label,
+        # Second sentiment signal from the enrich LLM — surfaced in the embed so
+        # the Discord reader can see the dual-signal agreement (or gap) that
+        # drove the alert. NULL for pre-migration rows; the embed builder
+        # simply omits the field in that case.
+        "llm_sentiment": (
+            float(article.llm_sentiment) if article.llm_sentiment is not None else None
+        ),
+        "llm_sentiment_label": article.llm_sentiment_label,
         "tickers": list(article.tickers or []),
         "sectors": list(article.sectors or []),
         "published_at": article.published_at,
